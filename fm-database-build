@@ -130,6 +130,8 @@ step "Configuring (--with-ssl=openssl)"
 cd "$SOURCE_DIR"
 if [[ "$OS" == "Darwin" ]]; then
     OPENSSL_PREFIX="$(brew --prefix openssl 2>/dev/null || echo /usr/local/opt/openssl)"
+    ICU_PREFIX="$(brew --prefix icu4c 2>/dev/null || echo /usr/local/opt/icu4c)"
+    export PKG_CONFIG_PATH="${ICU_PREFIX}/lib/pkgconfig:${OPENSSL_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
     ./configure --prefix="$PREFIX" --with-ssl=openssl \
         --with-includes="$OPENSSL_PREFIX/include" \
         --with-libraries="$OPENSSL_PREFIX/lib"
