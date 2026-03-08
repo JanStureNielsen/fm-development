@@ -1,0 +1,99 @@
+#!/bin/bash
+#
+# Load PostgreSQL backup files.
+# The database name is derived from the leading characters of each filename
+# (everything before the first dash).
+#
+# Usage: fm-db-load [-o owner] <directory | backup-file ...>
+#
+# Examples:
+#   fm-db-load ~/Downloads
+#   fm-db-load -o myuser ~/Downloads
+#   fm-db-load ~/Downloads/c665120d-98db-46e2-9591-3d0381b5afbf
+#
+
+OWNER="u4cv4dsie00kdu"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -o|--owner)
+      OWNER="$2"
+      shift
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: fm-db-load [-o owner] <directory | backup-file ...>"
+      echo ""
+      echo "Options:"
+      echo "  -o, --owner   Database owner (default: $OWNER)"
+      exit 0
+      ;;
+    -*|--*)
+      echo "Unknown option $1"
+      exit 1
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+  echo "Usage: fm-db-load [-o owner] <directory | backup-file ...>"
+  exit 1
+fi
+
+# If a single directory is given, load all files from it
+FILES=()
+if [[ ${#ARGS[@]} -eq 1 && -d "${ARGS[0]}" ]]; then
+  for f in "${ARGS[0]}"/*; do
+    [[ -f "$f" ]] && FILES+=("$f")
+  done
+else
+  FILES=("${ARGS[@]}")
+fi
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+  echo "No files found"
+  exit 1
+fi
+
+echo "Loading ${#FILES[@]} backup(s) with owner $OWNER"
+echo ""
+
+LOADED=0
+FAILED=0
+
+for FILE in "${FILES[@]}"; do
+  if [[ ! -f "$FILE" ]]; then
+    echo "SKIP....: $FILE (not found)"
+    echo ""
+    FAILED=$((FAILED + 1))
+    continue
+  fi
+
+  BASENAME=$(basename "$FILE")
+  DATABASE="${BASENAME%%-*}"
+
+  echo "DB,.....: $DATABASE"
+  echo "data....: $FILE"
+
+  dropdb "$DATABASE" 2>/dev/null || true
+
+  if ! createdb "$DATABASE" --owner "$OWNER" 2>&1; then
+    echo "FAILED..: $DATABASE (createdb)"
+    echo ""
+    FAILED=$((FAILED + 1))
+    continue
+  fi
+
+  # pg_restore returns non-zero on warnings; ignore exit code
+  pg_restore -d "$DATABASE" "$FILE" 2>&1 || true
+
+  echo "loaded..: $DATABASE"
+  LOADED=$((LOADED + 1))
+  echo ""
+done
+
+echo "Done: $LOADED loaded, $FAILED failed (${#FILES[@]} total)"
