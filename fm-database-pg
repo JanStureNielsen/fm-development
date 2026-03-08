@@ -3,7 +3,9 @@ set -euo pipefail
 
 # pg-build — Build PostgreSQL from source, initialize, and set up database
 
-SOURCE_DIR="$HOME/src/postgresql"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_DIR="$PARENT_DIR/postgresql"
 PREFIX="/usr/local/pgsql"
 PGDATA="$PREFIX/data"
 REPO_URL="https://git.postgresql.org/git/postgresql.git"
@@ -15,9 +17,13 @@ Usage: pg-build [OPTIONS]
 Build PostgreSQL from source, initialize the server, and create roles/databases
 to match the local Flexemarkets development environment.
 
+The script clones PostgreSQL source into the parent directory of wherever
+fm-development is cloned. For example, if cloned to ~/dev/fm-development,
+source is cloned to ~/dev/postgresql.
+
 Options:
   -h, --help          Show this help message
-  --source DIR        Source directory (default: ~/src/postgresql)
+  --source DIR        Source directory (default: ../postgresql relative to this script)
   --prefix DIR        Install prefix (default: /usr/local/pgsql)
 
 What it does:
