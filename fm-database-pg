@@ -145,6 +145,11 @@ make -j"$NCPU"
 step "Installing to $PREFIX"
 sudo make install
 
+# --- Build and install contrib extensions ---
+step "Building contrib extensions"
+make -C contrib -j"$NCPU"
+sudo make -C contrib install
+
 # --- Create postgres OS user ---
 step "Ensuring postgres OS user exists"
 if ! id postgres &>/dev/null; then
