@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    echo "Usage: $(basename "$0") [-u|--user USERNAME]"
+    echo
+    echo "Clone all FM repositories from adhocmarkets, setting up fork as origin"
+    echo "and org repo as upstream."
+    echo
+    echo "Options:"
+    echo "  -u, --user USERNAME   GitHub username for fork (default: JanStureNielsen)"
+    echo "  -h, --help            Show this help message"
+    exit 0
+}
+
+USER="JanStureNielsen"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -u|--user) USER="$2"; shift 2 ;;
+        -h|--help) usage ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
+
+# repo_name  local_dir  has_upstream
+REPOS=(
+    "fm-data        fm-server              yes"
+    "fm-ui          fm-ui                  yes"
+    "fm-robots      fm-robots              yes"
+    "fm-robots-container fm-robots-container no"
+    "fm-sdk         fm-sdk                 yes"
+    "fm-administration fm-administration   yes"
+)
+
+for entry in "${REPOS[@]}"; do
+    read -r repo local_dir has_upstream <<< "$entry"
+
+    if [[ -d "$DIR/$local_dir" ]]; then
+        echo "SKIP $local_dir (already exists)"
+        continue
+    fi
+
+    if [[ "$has_upstream" == "yes" ]]; then
+        echo "CLONE adhocmarkets/$repo -> $local_dir"
+        git clone "git@github.com:adhocmarkets/$repo.git" "$local_dir"
+        cd "$local_dir"
+        git remote rename origin upstream
+        git remote add origin "git@github.com:$USER/$repo.git"
+        git fetch --all
+        cd "$DIR"
+    else
+        echo "CLONE $USER/$repo -> $local_dir (no upstream)"
+        git clone "git@github.com:$USER/$repo.git" "$local_dir"
+    fi
+done
+
+echo "Done."
