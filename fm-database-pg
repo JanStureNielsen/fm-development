@@ -161,7 +161,7 @@ fi
 step "Initializing database cluster in $PGDATA"
 sudo mkdir -p "$PGDATA"
 sudo chown postgres:postgres "$PGDATA"
-sudo -u postgres "$PREFIX/bin/initdb" -D "$PGDATA"
+sudo su - postgres -c "'$PREFIX/bin/initdb' -D '$PGDATA'"
 
 # --- Configure pg_hba.conf ---
 step "Configuring trust authentication"
@@ -205,7 +205,7 @@ EOF
     sudo systemctl start postgresql
 else
     step "Starting PostgreSQL"
-    sudo -u postgres "$PREFIX/bin/pg_ctl" start -D "$PGDATA" -l "$PGDATA/server.log"
+    sudo su - postgres -c "'$PREFIX/bin/pg_ctl' start -D '$PGDATA' -l '$PGDATA/server.log'"
     echo ""
     echo "    macOS: To start PostgreSQL at login, create a LaunchAgent plist at"
     echo "    ~/Library/LaunchAgents/org.postgresql.pgsql.plist"
@@ -218,14 +218,14 @@ sleep 2
 PSQL="$PREFIX/bin/psql"
 
 step "Creating role: jan (superuser)"
-sudo -u postgres "$PSQL" -c "CREATE ROLE jan WITH LOGIN SUPERUSER;" 2>/dev/null || echo "    Role jan already exists"
+sudo su - postgres -c "'$PSQL' -c \"CREATE ROLE jan WITH LOGIN SUPERUSER;\"" 2>/dev/null || echo "    Role jan already exists"
 
 step "Creating role: u4cv4dsie00kdu (superuser)"
-sudo -u postgres "$PSQL" -c "CREATE ROLE u4cv4dsie00kdu WITH LOGIN SUPERUSER;" 2>/dev/null || echo "    Role u4cv4dsie00kdu already exists"
+sudo su - postgres -c "'$PSQL' -c \"CREATE ROLE u4cv4dsie00kdu WITH LOGIN SUPERUSER;\"" 2>/dev/null || echo "    Role u4cv4dsie00kdu already exists"
 
 # --- Create database ---
 step "Creating database: flexemarkets (owner: jan)"
-sudo -u postgres "$PSQL" -c "CREATE DATABASE flexemarkets OWNER jan;" 2>/dev/null || echo "    Database flexemarkets already exists"
+sudo su - postgres -c "'$PSQL' -c \"CREATE DATABASE flexemarkets OWNER jan;\"" 2>/dev/null || echo "    Database flexemarkets already exists"
 
 step "Done!"
 echo ""
