@@ -31,6 +31,42 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$DIR"
 
+step() { echo "==> $*"; }
+
+# --- SDKMAN ---
+step "Installing SDKMAN"
+if [[ -d "$HOME/.sdkman" ]]; then
+    echo "    Already installed"
+    export SDKMAN_DIR="$HOME/.sdkman"
+    source "$SDKMAN_DIR/bin/sdkman-init.sh"
+else
+    curl -s "https://get.sdkman.io" | bash
+    export SDKMAN_DIR="$HOME/.sdkman"
+    source "$SDKMAN_DIR/bin/sdkman-init.sh"
+fi
+
+step "Installing Java (latest) and Maven via SDKMAN"
+sdk install java < /dev/null || true
+sdk install maven < /dev/null || true
+
+# --- nvm ---
+step "Installing nvm"
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [[ -d "$NVM_DIR" ]]; then
+    echo "    Already installed"
+    source "$NVM_DIR/nvm.sh"
+else
+    curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh" | bash
+    source "$NVM_DIR/nvm.sh"
+fi
+
+step "Installing Node.js (latest LTS) via nvm"
+nvm install --lts
+nvm use --lts
+
+# --- Clone repositories ---
+step "Cloning repositories into $DIR"
+
 # repo_name  local_dir  has_upstream
 REPOS=(
     "fm-data        fm-server              yes"
