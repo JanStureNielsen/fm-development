@@ -37,32 +37,33 @@ step() { echo "==> $*"; }
 step "Installing SDKMAN"
 if [[ -d "$HOME/.sdkman" ]]; then
     echo "    Already installed"
-    export SDKMAN_DIR="$HOME/.sdkman"
-    source "$SDKMAN_DIR/bin/sdkman-init.sh"
 else
     curl -s "https://get.sdkman.io" | bash
-    export SDKMAN_DIR="$HOME/.sdkman"
-    source "$SDKMAN_DIR/bin/sdkman-init.sh"
 fi
+export SDKMAN_DIR="$HOME/.sdkman"
+set +u; source "$SDKMAN_DIR/bin/sdkman-init.sh"; set -u
 
 step "Installing Java (latest) and Maven via SDKMAN"
+set +u
 sdk install java < /dev/null || true
 sdk install maven < /dev/null || true
+set -u
 
 # --- nvm ---
 step "Installing nvm"
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 if [[ -d "$NVM_DIR" ]]; then
     echo "    Already installed"
-    source "$NVM_DIR/nvm.sh"
 else
     curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh" | bash
-    source "$NVM_DIR/nvm.sh"
 fi
+set +u; source "$NVM_DIR/nvm.sh"; set -u
 
 step "Installing Node.js (latest LTS) via nvm"
+set +u
 nvm install --lts
 nvm use --lts
+set -u
 
 # --- Clone repositories ---
 step "Cloning repositories into $DIR"
