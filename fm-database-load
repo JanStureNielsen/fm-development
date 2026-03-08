@@ -59,6 +59,12 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   exit 1
 fi
 
+# Ensure owner role exists
+if ! psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$OWNER'" | grep -q 1; then
+  echo "Creating role $OWNER"
+  createuser -s "$OWNER"
+fi
+
 echo "Loading ${#FILES[@]} backup(s) with owner $OWNER"
 echo ""
 
