@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# pg-build — Build PostgreSQL from source, initialize, and set up database
+
+SOURCE_DIR="$HOME/src/postgresql"
+PREFIX="/usr/local/pgsql"
+PGDATA="$PREFIX/data"
+REPO_URL="https://git.postgresql.org/git/postgresql.git"
+
+usage() {
+    cat <<EOF
+Usage: pg-build [OPTIONS]
+
+Build PostgreSQL from source, initialize the server, and create roles/databases
+to match the local Flexemarkets development environment.
+
+Options:
+  -h, --help          Show this help message
+  --source DIR        Source directory (default: ~/src/postgresql)
+  --prefix DIR        Install prefix (default: /usr/local/pgsql)
+
+What it does:
+  1. Install build dependencies (gcc, make, readline, zlib, openssl)
+  2. Clone or update PostgreSQL source
+  3. Checkout latest stable release tag
+  4. Configure, build, and install
+  5. Create postgres OS user if missing
+  6. Run initdb
+  7. Configure trust authentication
+  8. Install and start systemd service (Linux) or print launchctl guidance (macOS)
+  9. Create roles: jan (superuser), u4cv4dsie00kdu (superuser)
+  10. Create database: flexemarkets (owner: jan)
+
+Safety:
+  - Refuses to run if $PREFIX/data already exists
+  - Exits on first error
+EOF
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage ;;
+        --source) SOURCE_DIR="$2"; shift 2 ;;
+        --prefix) PREFIX="$2"; PGDATA="$PREFIX/data"; shift 2 ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+step() { echo "==> $*"; }
+
+# --- Safety check ---
+if [[ -d "$PGDATA" ]]; then
+    echo "ERROR: $PGDATA already exists."
+    echo "Back up or remove it before running this script."
+    exit 1
+fi
+
+# --- Detect OS ---
+step "Detecting OS"
+OS="$(uname -s)"
+if [[ "$OS" == "Linux" ]]; then
+    if command -v zypper &>/dev/null; then
+        PKG_MGR=zypper
+    elif command -v apt-get &>/dev/null; then
+        PKG_MGR=apt
+    elif command -v dnf &>/dev/null; then
+        PKG_MGR=dnf
+    else
+        echo "ERROR: No supported package manager found (zypper/apt/dnf)"
+        exit 1
+    fi
+    NCPU="$(nproc)"
+elif [[ "$OS" == "Darwin" ]]; then
+    PKG_MGR=brew
+    NCPU="$(sysctl -n hw.ncpu)"
+else
+    echo "ERROR: Unsupported OS: $OS"
+    exit 1
+fi
+echo "    OS=$OS, package manager=$PKG_MGR, CPUs=$NCPU"
+
+# --- Install build dependencies ---
+step "Installing build dependencies"
+case "$PKG_MGR" in
+    zypper)
+        sudo zypper install -y gcc make readline-devel zlib-devel libopenssl-devel bison flex libxml2-devel libxslt-devel git
+        ;;
+    apt)
+        sudo apt-get update
+        sudo apt-get install -y build-essential libreadline-dev zlib1g-dev libssl-dev bison flex libxml2-dev libxslt1-dev git
+        ;;
+    dnf)
+        sudo dnf install -y gcc make readline-devel zlib-devel openssl-devel bison flex libxml2-devel libxslt-devel git
+        ;;
+    brew)
+        brew install readline openssl icu4c pkg-config
+        ;;
+esac
+
+# --- Clone or update source ---
+step "Preparing source in $SOURCE_DIR"
+if [[ -d "$SOURCE_DIR/.git" ]]; then
+    echo "    Fetching latest tags"
+    git -C "$SOURCE_DIR" fetch --tags
+else
+    echo "    Cloning repository"
+    git clone "$REPO_URL" "$SOURCE_DIR"
+fi
+
+# --- Checkout latest stable tag ---
+step "Finding latest stable release tag"
+LATEST_TAG="$(git -C "$SOURCE_DIR" tag -l 'REL_*' | grep -v -E 'BETA|RC|alpha' | sort -V | tail -1)"
+if [[ -z "$LATEST_TAG" ]]; then
+    echo "ERROR: No stable REL_* tag found"
+    exit 1
+fi
+echo "    Tag: $LATEST_TAG"
+git -C "$SOURCE_DIR" checkout "$LATEST_TAG"
+
+# --- Configure ---
+step "Configuring (--with-ssl=openssl)"
+cd "$SOURCE_DIR"
+if [[ "$OS" == "Darwin" ]]; then
+    OPENSSL_PREFIX="$(brew --prefix openssl 2>/dev/null || echo /usr/local/opt/openssl)"
+    ./configure --prefix="$PREFIX" --with-ssl=openssl \
+        --with-includes="$OPENSSL_PREFIX/include" \
+        --with-libraries="$OPENSSL_PREFIX/lib"
+else
+    ./configure --prefix="$PREFIX" --with-ssl=openssl
+fi
+
+# --- Build ---
+step "Building (make -j$NCPU)"
+make -j"$NCPU"
+
+# --- Install ---
+step "Installing to $PREFIX"
+sudo make install
+
+# --- Create postgres OS user ---
+step "Ensuring postgres OS user exists"
+if ! id postgres &>/dev/null; then
+    if [[ "$OS" == "Linux" ]]; then
+        sudo useradd --system --home-dir "$PREFIX" --shell /bin/bash postgres
+    else
+        echo "    WARNING: postgres user does not exist. Create it manually on macOS."
+    fi
+else
+    echo "    Already exists"
+fi
+
+# --- initdb ---
+step "Initializing database cluster in $PGDATA"
+sudo mkdir -p "$PGDATA"
+sudo chown postgres:postgres "$PGDATA"
+sudo -u postgres "$PREFIX/bin/initdb" -D "$PGDATA"
+
+# --- Configure pg_hba.conf ---
+step "Configuring trust authentication"
+cat <<'HBA' | sudo tee "$PGDATA/pg_hba.conf" > /dev/null
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            trust
+host    all             all             ::1/128                 trust
+HBA
+
+# Configure unix_socket_directories to /tmp
+if grep -q '^#unix_socket_directories' "$PGDATA/postgresql.conf"; then
+    sudo sed -i "s|^#unix_socket_directories.*|unix_socket_directories = '/tmp'|" "$PGDATA/postgresql.conf"
+else
+    echo "unix_socket_directories = '/tmp'" | sudo tee -a "$PGDATA/postgresql.conf" > /dev/null
+fi
+
+# --- Service setup and start ---
+if [[ "$OS" == "Linux" ]]; then
+    step "Installing systemd service"
+    sudo tee /etc/systemd/system/postgresql.service > /dev/null <<EOF
+[Unit]
+Description=PostgreSQL database server
+After=network.target
+
+[Service]
+Type=forking
+User=postgres
+ExecStart=$PREFIX/bin/pg_ctl start -D $PGDATA -l $PGDATA/server.log
+ExecStop=$PREFIX/bin/pg_ctl stop -D $PGDATA -m fast
+ExecReload=$PREFIX/bin/pg_ctl reload -D $PGDATA
+TimeoutSec=120
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable postgresql
+
+    step "Starting PostgreSQL"
+    sudo systemctl start postgresql
+else
+    step "Starting PostgreSQL"
+    sudo -u postgres "$PREFIX/bin/pg_ctl" start -D "$PGDATA" -l "$PGDATA/server.log"
+    echo ""
+    echo "    macOS: To start PostgreSQL at login, create a LaunchAgent plist at"
+    echo "    ~/Library/LaunchAgents/org.postgresql.pgsql.plist"
+fi
+
+# Wait briefly for server to be ready
+sleep 2
+
+# --- Create roles ---
+PSQL="$PREFIX/bin/psql"
+
+step "Creating role: jan (superuser)"
+sudo -u postgres "$PSQL" -c "CREATE ROLE jan WITH LOGIN SUPERUSER;" 2>/dev/null || echo "    Role jan already exists"
+
+step "Creating role: u4cv4dsie00kdu (superuser)"
+sudo -u postgres "$PSQL" -c "CREATE ROLE u4cv4dsie00kdu WITH LOGIN SUPERUSER;" 2>/dev/null || echo "    Role u4cv4dsie00kdu already exists"
+
+# --- Create database ---
+step "Creating database: flexemarkets (owner: jan)"
+sudo -u postgres "$PSQL" -c "CREATE DATABASE flexemarkets OWNER jan;" 2>/dev/null || echo "    Database flexemarkets already exists"
+
+step "Done!"
+echo ""
+echo "PostgreSQL $LATEST_TAG installed to $PREFIX"
+echo "Data directory: $PGDATA"
+echo "Connect with: psql -h /tmp flexemarkets"
