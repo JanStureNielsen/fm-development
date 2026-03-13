@@ -66,6 +66,14 @@ nvm install --lts
 nvm use --lts
 set -u
 
+# --- Claude Code ---
+step "Installing Claude Code"
+if command -v claude &>/dev/null; then
+    echo "    Already installed"
+else
+    npm install -g @anthropic-ai/claude-code
+fi
+
 # --- Clone repositories ---
 step "Cloning repositories into $DIR"
 
