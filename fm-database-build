@@ -91,14 +91,14 @@ echo "    OS=$OS, package manager=$PKG_MGR, CPUs=$NCPU"
 step "Installing build dependencies"
 case "$PKG_MGR" in
     zypper)
-        sudo zypper install -y gcc make readline-devel zlib-devel libopenssl-devel bison flex libxml2-devel libxslt-devel git
+        sudo zypper install -y gcc make readline-devel zlib-devel libopenssl-devel bison flex libxml2-devel libxslt-devel icu-devel git
         ;;
     apt)
         sudo apt-get update
-        sudo apt-get install -y build-essential libreadline-dev zlib1g-dev libssl-dev bison flex libxml2-dev libxslt1-dev git
+        sudo apt-get install -y build-essential libreadline-dev zlib1g-dev libssl-dev bison flex libxml2-dev libxslt1-dev libicu-dev git
         ;;
     dnf)
-        sudo dnf install -y gcc make readline-devel zlib-devel openssl-devel bison flex libxml2-devel libxslt-devel git
+        sudo dnf install -y gcc make readline-devel zlib-devel openssl-devel bison flex libxml2-devel libxslt-devel libicu-devel git
         ;;
     brew)
         brew install readline openssl icu4c pkg-config
