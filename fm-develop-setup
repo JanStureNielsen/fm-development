@@ -333,7 +333,7 @@ host    all             all             ::1/128                 trust
 HBA
 
     # Configure unix_socket_directories to /tmp
-    if grep -q '^#unix_socket_directories' "$PGDATA/postgresql.conf"; then
+    if sudo grep -q '^#unix_socket_directories' "$PGDATA/postgresql.conf"; then
         sudo sed -i "s|^#unix_socket_directories.*|unix_socket_directories = '/tmp'|" "$PGDATA/postgresql.conf"
     else
         echo "unix_socket_directories = '/tmp'" | sudo tee -a "$PGDATA/postgresql.conf" > /dev/null
