@@ -203,7 +203,7 @@ database_build() {
     step "Installing build dependencies"
     case "$PKG_MGR" in
         zypper)
-            sudo zypper install -y gcc make readline-devel zlib-devel libopenssl-devel bison flex libxml2-devel libxslt-devel icu-devel git
+            sudo zypper install -y gcc make readline-devel zlib-devel libopenssl-devel bison flex libxml2-devel libxslt-devel libicu-devel git
             ;;
         apt)
             sudo apt-get update
