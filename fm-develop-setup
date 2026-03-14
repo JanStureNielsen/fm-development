@@ -41,6 +41,7 @@ Commands:
   database build      Build PostgreSQL from source
   database install    Initialize database, create service, roles, and databases
   database load       Load PostgreSQL backup files
+  database delete     Stop service and remove all data, binaries, and source
 
 Options:
   -u, --user USERNAME   GitHub username for fork (default: $USER)
@@ -486,6 +487,53 @@ EOF
 }
 
 # ============================================================
+# database delete — stop service, remove data and binaries
+# ============================================================
+database_delete() {
+    detect_os
+
+    echo "WARNING: This will permanently destroy ALL data in $PGDATA"
+    echo "         and remove PostgreSQL binaries from $PREFIX."
+    echo ""
+    read -r -p "Type 'yes' to confirm: " CONFIRM
+    if [[ "$CONFIRM" != "yes" ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    # --- Stop service ---
+    step "Stopping PostgreSQL"
+    if [[ "$OS" == "Linux" ]]; then
+        sudo systemctl stop postgresql 2>/dev/null || true
+        sudo systemctl disable postgresql 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/postgresql.service
+        sudo systemctl daemon-reload
+    else
+        sudo su - postgres -c "'$PREFIX/bin/pg_ctl' stop -D '$PGDATA' -m fast" 2>/dev/null || true
+    fi
+
+    # --- Remove data directory ---
+    if [[ -d "$PGDATA" ]]; then
+        step "Removing data directory $PGDATA"
+        sudo rm -rf "$PGDATA"
+    fi
+
+    # --- Remove binaries ---
+    if [[ -d "$PREFIX" ]]; then
+        step "Removing $PREFIX"
+        sudo rm -rf "$PREFIX"
+    fi
+
+    # --- Remove source ---
+    if [[ -d "$SOURCE_DIR" ]]; then
+        step "Removing source directory $SOURCE_DIR"
+        rm -rf "$SOURCE_DIR"
+    fi
+
+    step "Done. PostgreSQL has been completely removed."
+}
+
+# ============================================================
 # Dispatch
 # ============================================================
 case "${1:-}" in
@@ -513,6 +561,7 @@ EOF
             build)   shift; database_build "$@" ;;
             install) shift; database_install "$@" ;;
             load)    shift; database_load "$@" ;;
+            delete)  shift; database_delete "$@" ;;
             -h|--help|"")
                 cat <<EOF
 Usage: $(basename "$0") database <command>
@@ -521,6 +570,7 @@ Commands:
   build     Build PostgreSQL from source
   install   Initialize database, create service, roles, and databases
   load      Load PostgreSQL backup files
+  delete    Stop service and remove all data, binaries, and source
 EOF
                 exit 0
                 ;;
