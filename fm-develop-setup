@@ -148,7 +148,7 @@ setup_toolchain() {
     if command -v heroku &>/dev/null; then
         echo "    Already installed"
     else
-        npm install -g heroku
+        curl https://cli-assets.heroku.com/install.sh | bash
     fi
 }
 
