@@ -16,6 +16,7 @@ A unified CLI with subcommands:
 - **database build** — Install build deps, clone/update PostgreSQL source, compile, and install binaries + contrib. Requires sudo.
 - **database install** — Run initdb, configure trust auth, set up systemd service (Linux) or launchctl guidance (macOS), create roles (`jan`, `u4cv4dsie00kdu`) and the `flexemarkets` database. Requires sudo.
 - **database load [-o OWNER] \<dir|files\>** — Load pg_restore backups. DB name derived from filename prefix (before first dash). Default owner: `u4cv4dsie00kdu`.
+- **database delete** — Stop service, remove data directory, binaries, and source. Requires typing `yes` to confirm.
 
 Global options: `-u`/`--user` (GitHub fork username), `--source` (PG source dir), `--prefix` (PG install prefix).
 
