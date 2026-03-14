@@ -6,8 +6,8 @@ PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Defaults
 SOURCE_DIR="$PARENT_DIR/postgresql"
-PREFIX="/usr/local/pgsql"
-PGDATA="$PREFIX/data"
+PG_PREFIX="/usr/local/pgsql"
+PGDATA="$PG_PREFIX/data"
 REPO_URL="https://git.postgresql.org/git/postgresql.git"
 USER="JanStureNielsen"
 
@@ -16,15 +16,15 @@ step() { echo "==> $*"; }
 configure_path() {
     step "Configuring PATH"
     PROFILE="$HOME/.profile"
-    if ! grep -qF "$PREFIX/bin" "$PROFILE" 2>/dev/null; then
+    if ! grep -qF "$PG_PREFIX/bin" "$PROFILE" 2>/dev/null; then
         echo "" >> "$PROFILE"
         echo "# PostgreSQL" >> "$PROFILE"
-        echo "export PATH=\"$PREFIX/bin:\$PATH\"" >> "$PROFILE"
-        echo "    Added $PREFIX/bin to $PROFILE"
+        echo "export PATH=\"$PG_PREFIX/bin:\$PATH\"" >> "$PROFILE"
+        echo "    Added $PG_PREFIX/bin to $PROFILE"
     else
         echo "    Already in $PROFILE"
     fi
-    export PATH="$PREFIX/bin:$PATH"
+    export PATH="$PG_PREFIX/bin:$PATH"
     echo "    Run 'source $PROFILE' or start a new shell to use psql."
 }
 
@@ -46,7 +46,7 @@ Commands:
 Options:
   -u, --user USERNAME   GitHub username for fork (default: $USER)
   --source DIR          PostgreSQL source directory (default: $SOURCE_DIR)
-  --prefix DIR          PostgreSQL install prefix (default: $PREFIX)
+  --prefix DIR          PostgreSQL install prefix (default: $PG_PREFIX)
   -h, --help            Show this help message
 EOF
     exit 0
@@ -57,7 +57,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -u|--user) USER="$2"; shift 2 ;;
         --source) SOURCE_DIR="$2"; shift 2 ;;
-        --prefix) PREFIX="$2"; PGDATA="$PREFIX/data"; shift 2 ;;
+        --prefix) PG_PREFIX="$2"; PGDATA="$PG_PREFIX/data"; shift 2 ;;
         -h|--help) usage ;;
         -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *) break ;;
@@ -268,11 +268,11 @@ database_build() {
         OPENSSL_PREFIX="$(brew --prefix openssl 2>/dev/null || echo /usr/local/opt/openssl)"
         ICU_PREFIX="$(brew --prefix icu4c 2>/dev/null || echo /usr/local/opt/icu4c)"
         export PKG_CONFIG_PATH="${ICU_PREFIX}/lib/pkgconfig:${OPENSSL_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-        ./configure --prefix="$PREFIX" --with-ssl=openssl \
+        ./configure --prefix="$PG_PREFIX" --with-ssl=openssl \
             --with-includes="$OPENSSL_PREFIX/include" \
             --with-libraries="$OPENSSL_PREFIX/lib"
     else
-        ./configure --prefix="$PREFIX" --with-ssl=openssl
+        ./configure --prefix="$PG_PREFIX" --with-ssl=openssl
     fi
 
     # --- Build ---
@@ -280,7 +280,7 @@ database_build() {
     make -j"$NCPU"
 
     # --- Install ---
-    step "Installing to $PREFIX"
+    step "Installing to $PG_PREFIX"
     sudo make install
 
     # --- Build and install contrib extensions ---
@@ -291,7 +291,7 @@ database_build() {
     configure_path
 
     echo ""
-    echo "PostgreSQL $LATEST_TAG built and installed to $PREFIX"
+    echo "PostgreSQL $LATEST_TAG built and installed to $PG_PREFIX"
 }
 
 # ============================================================
@@ -300,10 +300,10 @@ database_build() {
 database_install() {
     detect_os
 
-    PSQL="$PREFIX/bin/psql"
+    PSQL="$PG_PREFIX/bin/psql"
 
-    if [[ ! -x "$PREFIX/bin/initdb" ]]; then
-        echo "ERROR: $PREFIX/bin/initdb not found."
+    if [[ ! -x "$PG_PREFIX/bin/initdb" ]]; then
+        echo "ERROR: $PG_PREFIX/bin/initdb not found."
         echo "Run '$(basename "$0") database build' first."
         exit 1
     fi
@@ -318,7 +318,7 @@ database_install() {
     step "Ensuring postgres OS user exists"
     if ! id postgres &>/dev/null; then
         if [[ "$OS" == "Linux" ]]; then
-            sudo useradd --system --home-dir "$PREFIX" --shell /bin/bash postgres
+            sudo useradd --system --home-dir "$PG_PREFIX" --shell /bin/bash postgres
         else
             echo "    WARNING: postgres user does not exist. Create it manually on macOS."
         fi
@@ -330,7 +330,7 @@ database_install() {
     step "Initializing database cluster in $PGDATA"
     sudo mkdir -p "$PGDATA"
     sudo chown postgres:postgres "$PGDATA"
-    sudo su - postgres -c "'$PREFIX/bin/initdb' -D '$PGDATA'"
+    sudo su - postgres -c "'$PG_PREFIX/bin/initdb' -D '$PGDATA'"
 
     # --- Configure pg_hba.conf ---
     step "Configuring trust authentication"
@@ -359,9 +359,9 @@ After=network.target
 [Service]
 Type=forking
 User=postgres
-ExecStart=$PREFIX/bin/pg_ctl start -D $PGDATA -l $PGDATA/server.log
-ExecStop=$PREFIX/bin/pg_ctl stop -D $PGDATA -m fast
-ExecReload=$PREFIX/bin/pg_ctl reload -D $PGDATA
+ExecStart=$PG_PREFIX/bin/pg_ctl start -D $PGDATA -l $PGDATA/server.log
+ExecStop=$PG_PREFIX/bin/pg_ctl stop -D $PGDATA -m fast
+ExecReload=$PG_PREFIX/bin/pg_ctl reload -D $PGDATA
 TimeoutSec=120
 
 [Install]
@@ -374,7 +374,7 @@ EOF
         sudo systemctl start postgresql
     else
         step "Starting PostgreSQL"
-        sudo su - postgres -c "'$PREFIX/bin/pg_ctl' start -D '$PGDATA' -l '$PGDATA/server.log'"
+        sudo su - postgres -c "'$PG_PREFIX/bin/pg_ctl' start -D '$PGDATA' -l '$PGDATA/server.log'"
         echo ""
         echo "    macOS: To start PostgreSQL at login, create a LaunchAgent plist at"
         echo "    ~/Library/LaunchAgents/org.postgresql.pgsql.plist"
@@ -398,7 +398,7 @@ EOF
 
     step "Done!"
     echo ""
-    echo "PostgreSQL installed to $PREFIX"
+    echo "PostgreSQL installed to $PG_PREFIX"
     echo "Data directory: $PGDATA"
     echo "Connect with: psql -h /tmp flexemarkets"
 }
@@ -501,7 +501,7 @@ database_delete() {
     detect_os
 
     echo "WARNING: This will permanently destroy ALL data in $PGDATA"
-    echo "         and remove PostgreSQL binaries from $PREFIX."
+    echo "         and remove PostgreSQL binaries from $PG_PREFIX."
     echo ""
     read -r -p "Type 'yes' to confirm: " CONFIRM
     if [[ "$CONFIRM" != "yes" ]]; then
@@ -517,7 +517,7 @@ database_delete() {
         sudo rm -f /etc/systemd/system/postgresql.service
         sudo systemctl daemon-reload
     else
-        sudo su - postgres -c "'$PREFIX/bin/pg_ctl' stop -D '$PGDATA' -m fast" 2>/dev/null || true
+        sudo su - postgres -c "'$PG_PREFIX/bin/pg_ctl' stop -D '$PGDATA' -m fast" 2>/dev/null || true
     fi
 
     # --- Remove data directory ---
@@ -527,9 +527,9 @@ database_delete() {
     fi
 
     # --- Remove binaries ---
-    if [[ -d "$PREFIX" ]]; then
-        step "Removing $PREFIX"
-        sudo rm -rf "$PREFIX"
+    if [[ -d "$PG_PREFIX" ]]; then
+        step "Removing $PG_PREFIX"
+        sudo rm -rf "$PG_PREFIX"
     fi
 
     # --- Remove source ---
