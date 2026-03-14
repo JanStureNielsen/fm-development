@@ -368,11 +368,27 @@ EOF
     step "Creating database: flexemarkets (owner: jan)"
     sudo su - postgres -c "'$PSQL' -c \"CREATE DATABASE flexemarkets OWNER jan;\"" 2>/dev/null || echo "    Database flexemarkets already exists"
 
+    # --- Add to PATH ---
+    step "Configuring PATH"
+    PROFILE="$HOME/.profile"
+    PATH_LINE="export PATH=\"$PREFIX/bin:\$PATH\""
+    if ! grep -qF "$PREFIX/bin" "$PROFILE" 2>/dev/null; then
+        echo "" >> "$PROFILE"
+        echo "# PostgreSQL" >> "$PROFILE"
+        echo "$PATH_LINE" >> "$PROFILE"
+        echo "    Added $PREFIX/bin to $PROFILE"
+    else
+        echo "    Already in $PROFILE"
+    fi
+    export PATH="$PREFIX/bin:$PATH"
+
     step "Done!"
     echo ""
     echo "PostgreSQL installed to $PREFIX"
     echo "Data directory: $PGDATA"
     echo "Connect with: psql -h /tmp flexemarkets"
+    echo ""
+    echo "Run 'source $PROFILE' or start a new shell to use psql."
 }
 
 # ============================================================
