@@ -13,6 +13,21 @@ USER="JanStureNielsen"
 
 step() { echo "==> $*"; }
 
+configure_path() {
+    step "Configuring PATH"
+    PROFILE="$HOME/.profile"
+    if ! grep -qF "$PREFIX/bin" "$PROFILE" 2>/dev/null; then
+        echo "" >> "$PROFILE"
+        echo "# PostgreSQL" >> "$PROFILE"
+        echo "export PATH=\"$PREFIX/bin:\$PATH\"" >> "$PROFILE"
+        echo "    Added $PREFIX/bin to $PROFILE"
+    else
+        echo "    Already in $PROFILE"
+    fi
+    export PATH="$PREFIX/bin:$PATH"
+    echo "    Run 'source $PROFILE' or start a new shell to use psql."
+}
+
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS] [COMMAND]
@@ -264,6 +279,8 @@ database_build() {
     make -C contrib -j"$NCPU"
     sudo make -C contrib install
 
+    configure_path
+
     echo ""
     echo "PostgreSQL $LATEST_TAG built and installed to $PREFIX"
 }
@@ -368,27 +385,13 @@ EOF
     step "Creating database: flexemarkets (owner: jan)"
     sudo su - postgres -c "'$PSQL' -c \"CREATE DATABASE flexemarkets OWNER jan;\"" 2>/dev/null || echo "    Database flexemarkets already exists"
 
-    # --- Add to PATH ---
-    step "Configuring PATH"
-    PROFILE="$HOME/.profile"
-    PATH_LINE="export PATH=\"$PREFIX/bin:\$PATH\""
-    if ! grep -qF "$PREFIX/bin" "$PROFILE" 2>/dev/null; then
-        echo "" >> "$PROFILE"
-        echo "# PostgreSQL" >> "$PROFILE"
-        echo "$PATH_LINE" >> "$PROFILE"
-        echo "    Added $PREFIX/bin to $PROFILE"
-    else
-        echo "    Already in $PROFILE"
-    fi
-    export PATH="$PREFIX/bin:$PATH"
+    configure_path
 
     step "Done!"
     echo ""
     echo "PostgreSQL installed to $PREFIX"
     echo "Data directory: $PGDATA"
     echo "Connect with: psql -h /tmp flexemarkets"
-    echo ""
-    echo "Run 'source $PROFILE' or start a new shell to use psql."
 }
 
 # ============================================================
