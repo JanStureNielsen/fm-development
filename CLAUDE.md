@@ -4,22 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-This is the **fm-development** repo — a collection of shell scripts for bootstrapping the Flexemarkets development environment. It is part of the `adhocmarkets` GitHub organization. There is no build system, test suite, or linter — just standalone bash scripts.
+This is the **fm-development** repo — a single script for bootstrapping the Flexemarkets development environment. It is part of the `adhocmarkets` GitHub organization. There is no build system, test suite, or linter.
 
-## Scripts
+## fm-develop-setup
 
-- **fm-development-setup** — Clones all FM repositories (fm-data/fm-server, fm-ui, fm-robots, fm-sdk, fm-administration) from adhocmarkets, sets up fork-based git remotes (upstream = org, origin = user fork), and installs toolchain dependencies (SDKMAN for Java/Maven, nvm for Node.js, Claude Code).
-- **fm-database-build** — Builds PostgreSQL from source, runs initdb, configures trust auth, sets up a systemd service (Linux) or gives launchctl guidance (macOS), and creates the `flexemarkets` database with roles `jan` and `u4cv4dsie00kdu`. Requires sudo.
-- **fm-database-load** — Loads pg_restore backup files. Database name is derived from the filename prefix (before the first dash). Default owner is `u4cv4dsie00kdu`.
+A unified CLI with subcommands:
+
+- **(no args)** — Install toolchain (SDKMAN/Java/Maven, nvm/Node.js, Claude Code) and clone all repos.
+- **repo install** — Clone FM repositories and configure fork remotes (upstream = org, origin = user fork).
+- **repo update** — Fetch all remotes and pull latest code for all repositories.
+- **database build** — Install build deps, clone/update PostgreSQL source, compile, and install binaries + contrib. Requires sudo.
+- **database install** — Run initdb, configure trust auth, set up systemd service (Linux) or launchctl guidance (macOS), create roles (`jan`, `u4cv4dsie00kdu`) and the `flexemarkets` database. Requires sudo.
+- **database load [-o OWNER] \<dir|files\>** — Load pg_restore backups. DB name derived from filename prefix (before first dash). Default owner: `u4cv4dsie00kdu`.
+
+Global options: `-u`/`--user` (GitHub fork username), `--source` (PG source dir), `--prefix` (PG install prefix).
 
 ## Conventions
 
-- All scripts use `set -euo pipefail` (or should — fm-database-load currently uses plain `#!/bin/bash`).
-- Scripts operate relative to their parent directory (`$SCRIPT_DIR/..`), not the current working directory.
+- Uses `set -euo pipefail` and `#!/usr/bin/env bash`.
+- Operates relative to parent directory (`$SCRIPT_DIR/..`), not the current working directory.
 - The `step()` function pattern (`step() { echo "==> $*"; }`) is used for progress output.
 - Git remote convention: `upstream` = adhocmarkets org repo, `origin` = developer's personal fork.
 
-## Related Repositories (cloned by fm-development-setup)
+## Related Repositories (cloned by repo install)
 
 | Repo name | Local directory | Description |
 |---|---|---|
