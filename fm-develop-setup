@@ -20,6 +20,7 @@ is_sdkman_installed() { [[ -d "$HOME/.sdkman" ]]; }
 is_nvm_installed()    { [[ -d "${NVM_DIR:-$HOME/.nvm}" ]]; }
 is_claude_installed() { command -v claude &>/dev/null; }
 is_heroku_installed() { command -v heroku &>/dev/null; }
+is_doctl_installed()  { command -v doctl &>/dev/null; }
 is_pg_installed()     { [[ -x "$PG_PREFIX/bin/psql" ]]; }
 is_pg_running()       { pgrep -x postgres &>/dev/null; }
 
@@ -200,11 +201,27 @@ install_heroku() {
     fi
 }
 
+install_doctl() {
+    step "Installing DigitalOcean CLI (doctl)"
+    if command -v doctl &>/dev/null; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        zypper)  sudo zypper install -y doctl ;;
+        apt)     sudo snap install doctl ;;
+        dnf)     sudo dnf install -y doctl ;;
+        brew)    brew install doctl ;;
+    esac
+}
+
 setup_toolchain() {
     install_sdkman
     install_nvm
     install_claude
     install_heroku
+    install_doctl
 }
 
 # ============================================================
@@ -665,6 +682,7 @@ EOF
         add_task nvm    is_nvm_installed    "Install nvm (Node.js)"
         add_task claude is_claude_installed "Install Claude Code"
         add_task heroku is_heroku_installed "Install Heroku CLI"
+        add_task doctl  is_doctl_installed  "Install DigitalOcean CLI (doctl)"
 
         if is_pg_installed && is_pg_running; then
             TASK_LABELS+=("[✓] PostgreSQL database (already installed and running)")
@@ -675,17 +693,34 @@ EOF
             TASKS+=("database")
         fi
 
-        TASK_LABELS+=("[ ] Clone repositories and configure remotes")
-        TASKS+=("repos")
+        TASK_LABELS+=("Clone repositories and configure remotes:")
+        any_repo_needed=false
+        for entry in "${REPOS[@]}"; do
+            read -r repo local_dir _has_upstream <<< "$entry"
+            if [[ -d "$PARENT_DIR/$local_dir" ]]; then
+                TASK_LABELS+=("  [✓] $local_dir (already cloned)")
+            else
+                TASK_LABELS+=("  [ ] $local_dir")
+                any_repo_needed=true
+            fi
+        done
+        if "$any_repo_needed"; then
+            TASKS+=("repos")
+        fi
 
         # --- Show plan and ask for confirmation ---
         echo ""
-        echo "The following actions will be performed:"
+        echo "Unchecked items will be installed:"
         echo ""
         for label in "${TASK_LABELS[@]}"; do
             echo "  $label"
         done
         echo ""
+
+        if [[ ${#TASKS[@]} -eq 0 ]]; then
+            echo "Everything is already installed."
+            exit 0
+        fi
 
         read -r -p "Proceed? [Y/n] " REPLY
         REPLY="${REPLY:-Y}"
@@ -705,6 +740,7 @@ EOF
                 nvm)    install_nvm ;;
                 claude) install_claude ;;
                 heroku) install_heroku ;;
+                doctl)  install_doctl ;;
                 database)
                     database_build
                     database_install
