@@ -209,10 +209,23 @@ install_doctl() {
     fi
     detect_os
     case "$PKG_MGR" in
-        zypper)  sudo zypper install -y doctl ;;
-        apt)     sudo snap install doctl ;;
-        dnf)     sudo dnf install -y doctl ;;
-        brew)    brew install doctl ;;
+        brew)
+            brew install doctl
+            ;;
+        *)
+            local version
+            version="$(curl -s https://api.github.com/repos/digitalocean/doctl/releases/latest | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')"
+            local arch
+            arch="$(uname -m)"
+            case "$arch" in
+                x86_64)  arch="amd64" ;;
+                aarch64) arch="arm64" ;;
+            esac
+            local tarball="doctl-${version}-linux-${arch}.tar.gz"
+            local url="https://github.com/digitalocean/doctl/releases/download/v${version}/${tarball}"
+            echo "    Downloading doctl v${version} for linux/${arch}"
+            curl -sL "$url" | sudo tar xz -C /usr/local/bin
+            ;;
     esac
 }
 
