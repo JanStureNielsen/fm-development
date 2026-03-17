@@ -46,13 +46,21 @@ Usage: $(basename "$0") [OPTIONS] [COMMAND]
 Bootstrap the Flexemarkets development environment.
 
 Commands:
-  (none)              Install zip, git, toolchain, clone repos, and optionally PostgreSQL
+  (none)              Show checklist and install everything that is missing
+  zip                 Install zip
+  git                 Install git
+  sdkman              Install SDKMAN (Java, Maven)
+  nvm                 Install nvm (Node.js)
+  claude              Install Claude Code
+  heroku              Install Heroku CLI
+  doctl               Install DigitalOcean CLI
   repo install        Clone repositories and configure remotes
   repo update         Fetch and pull latest code for all repositories
-  database build      Build PostgreSQL from source
-  database install    Initialize database, create service, roles, and databases
-  database load       Load PostgreSQL backup files
-  database delete     Stop service and remove all data, binaries, and source
+  repo remotes        Show remotes for all repositories
+  pg build            Build PostgreSQL from source
+  pg install          Initialize database, create service, roles, and databases
+  pg load             Load PostgreSQL backup files
+  pg delete           Stop service and remove all data, binaries, and source
 
 Options:
   -u, --user USERNAME   GitHub username for fork (default: $USER)
@@ -299,6 +307,45 @@ repo_update() {
     done
 
     echo "Done."
+}
+
+# ============================================================
+# repo remotes — show remotes for all repositories
+# ============================================================
+repo_remotes() {
+    for entry in "${REPOS[@]}"; do
+        read -r repo local_dir _has_upstream <<< "$entry"
+
+        if [[ ! -d "$PARENT_DIR/$local_dir" ]]; then
+            echo "$local_dir: (not cloned)"
+            echo ""
+            continue
+        fi
+
+        echo "$local_dir:"
+        cd "$PARENT_DIR/$local_dir"
+        local default_remote
+        default_remote="$(git config --get checkout.defaultRemote 2>/dev/null || true)"
+        if [[ -z "$default_remote" ]]; then
+            # Infer default: upstream if it exists, otherwise origin
+            if git remote | grep -qx upstream; then
+                default_remote="upstream"
+            else
+                default_remote="origin"
+            fi
+        fi
+        while IFS= read -r remote; do
+            local url
+            url="$(git remote get-url "$remote" 2>/dev/null)"
+            if [[ "$remote" == "$default_remote" ]]; then
+                echo "  $remote  $url (default)"
+            else
+                echo "  $remote  $url"
+            fi
+        done < <(git remote)
+        echo ""
+        cd "$PARENT_DIR"
+    done
 }
 
 # ============================================================
@@ -635,6 +682,7 @@ case "${1:-}" in
         case "${1:-}" in
             install) shift; repo_install "$@" ;;
             update)  shift; repo_update "$@" ;;
+            remotes) shift; repo_remotes "$@" ;;
             -h|--help|"")
                 cat <<EOF
 Usage: $(basename "$0") repo <command>
@@ -642,13 +690,21 @@ Usage: $(basename "$0") repo <command>
 Commands:
   install   Clone repositories and configure remotes
   update    Fetch and pull latest code for all repositories
+  remotes   Show remotes for all repositories
 EOF
                 exit 0
                 ;;
             *) echo "Unknown repo command: $1" >&2; exit 1 ;;
         esac
         ;;
-    database)
+    zip)     install_zip ;;
+    git)     install_git ;;
+    sdkman)  install_sdkman ;;
+    nvm)     install_nvm ;;
+    claude)  install_claude ;;
+    heroku)  install_heroku ;;
+    doctl)   install_doctl ;;
+    pg|postgresql|database)
         shift
         case "${1:-}" in
             build)   shift; database_build "$@" ;;
@@ -657,7 +713,7 @@ EOF
             delete)  shift; database_delete "$@" ;;
             -h|--help|"")
                 cat <<EOF
-Usage: $(basename "$0") database <command>
+Usage: $(basename "$0") pg <command>
 
 Commands:
   build     Build PostgreSQL from source
@@ -667,7 +723,7 @@ Commands:
 EOF
                 exit 0
                 ;;
-            *) echo "Unknown database command: $1" >&2; exit 1 ;;
+            *) echo "Unknown pg command: $1" >&2; exit 1 ;;
         esac
         ;;
     "")
