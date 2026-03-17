@@ -298,11 +298,7 @@ repo_update() {
         echo "UPDATE $local_dir"
         cd "$PARENT_DIR/$local_dir"
         git fetch --all
-        if [[ "$has_upstream" == "yes" ]]; then
-            git pull upstream "$(git rev-parse --abbrev-ref HEAD)" || true
-        else
-            git pull || true
-        fi
+        git pull origin "$(git rev-parse --abbrev-ref HEAD)" || true
         cd "$PARENT_DIR"
     done
 
@@ -327,12 +323,7 @@ repo_remotes() {
         local default_remote
         default_remote="$(git config --get checkout.defaultRemote 2>/dev/null || true)"
         if [[ -z "$default_remote" ]]; then
-            # Infer default: upstream if it exists, otherwise origin
-            if git remote | grep -qx upstream; then
-                default_remote="upstream"
-            else
-                default_remote="origin"
-            fi
+            default_remote="origin"
         fi
         while IFS= read -r remote; do
             local url
