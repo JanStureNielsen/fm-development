@@ -13,6 +13,16 @@ USER="JanStureNielsen"
 
 step() { echo "==> $*"; }
 
+# --- Status helpers ---
+is_zip_installed()  { command -v zip &>/dev/null; }
+is_git_installed()  { command -v git &>/dev/null; }
+is_sdkman_installed() { [[ -d "$HOME/.sdkman" ]]; }
+is_nvm_installed()    { [[ -d "${NVM_DIR:-$HOME/.nvm}" ]]; }
+is_claude_installed() { command -v claude &>/dev/null; }
+is_heroku_installed() { command -v heroku &>/dev/null; }
+is_pg_installed()     { [[ -x "$PG_PREFIX/bin/psql" ]]; }
+is_pg_running()       { pgrep -x postgres &>/dev/null; }
+
 configure_path() {
     step "Configuring PATH"
     PROFILE="$HOME/.profile"
@@ -35,7 +45,7 @@ Usage: $(basename "$0") [OPTIONS] [COMMAND]
 Bootstrap the Flexemarkets development environment.
 
 Commands:
-  (none)              Install toolchain, clone repos (runs toolchain + repo install)
+  (none)              Install zip, git, toolchain, clone repos, and optionally PostgreSQL
   repo install        Clone repositories and configure remotes
   repo update         Fetch and pull latest code for all repositories
   database build      Build PostgreSQL from source
@@ -99,10 +109,45 @@ REPOS=(
 )
 
 # ============================================================
-# Install toolchain (SDKMAN, nvm, Claude Code)
+# Install zip
 # ============================================================
-setup_toolchain() {
-    # --- SDKMAN ---
+install_zip() {
+    step "Installing zip"
+    if is_zip_installed; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        zypper)  sudo zypper install -y zip ;;
+        apt)     sudo apt-get update && sudo apt-get install -y zip ;;
+        dnf)     sudo dnf install -y zip ;;
+        brew)    brew install zip ;;
+    esac
+}
+
+# ============================================================
+# Install git
+# ============================================================
+install_git() {
+    step "Installing git"
+    if is_git_installed; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        zypper)  sudo zypper install -y git ;;
+        apt)     sudo apt-get update && sudo apt-get install -y git ;;
+        dnf)     sudo dnf install -y git ;;
+        brew)    brew install git ;;
+    esac
+}
+
+# ============================================================
+# Install toolchain components
+# ============================================================
+install_sdkman() {
     step "Installing SDKMAN"
     if [[ -d "$HOME/.sdkman" ]]; then
         echo "    Already installed"
@@ -117,8 +162,9 @@ setup_toolchain() {
     sdk install java < /dev/null || true
     sdk install maven < /dev/null || true
     set -u
+}
 
-    # --- nvm ---
+install_nvm() {
     step "Installing nvm"
     export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
     if [[ -d "$NVM_DIR" ]]; then
@@ -134,22 +180,31 @@ setup_toolchain() {
     nvm install --lts
     nvm use --lts
     set -u
+}
 
-    # --- Claude Code ---
+install_claude() {
     step "Installing Claude Code"
     if command -v claude &>/dev/null; then
         echo "    Already installed"
     else
         npm install -g @anthropic-ai/claude-code
     fi
+}
 
-    # --- Heroku CLI ---
+install_heroku() {
     step "Installing Heroku CLI"
     if command -v heroku &>/dev/null; then
         echo "    Already installed"
     else
         curl https://cli-assets.heroku.com/install.sh | bash
     fi
+}
+
+setup_toolchain() {
+    install_sdkman
+    install_nvm
+    install_claude
+    install_heroku
 }
 
 # ============================================================
@@ -586,8 +641,77 @@ EOF
         esac
         ;;
     "")
-        setup_toolchain
-        repo_install
+        detect_os
+
+        # --- Build pre-flight checklist ---
+        TASKS=()
+        TASK_LABELS=()
+
+        # Helper: add a checklist item
+        # Usage: add_task <task_key> <is_installed_func> <label> [suffix_if_installed]
+        add_task() {
+            local key="$1" check="$2" label="$3" suffix="${4:-already installed}"
+            if $check; then
+                TASK_LABELS+=("[✓] $label ($suffix)")
+            else
+                TASK_LABELS+=("[ ] $label")
+                TASKS+=("$key")
+            fi
+        }
+
+        add_task zip    is_zip_installed    "Install zip"
+        add_task git    is_git_installed    "Install git"
+        add_task sdkman is_sdkman_installed "Install SDKMAN (Java, Maven)"
+        add_task nvm    is_nvm_installed    "Install nvm (Node.js)"
+        add_task claude is_claude_installed "Install Claude Code"
+        add_task heroku is_heroku_installed "Install Heroku CLI"
+
+        if is_pg_installed && is_pg_running; then
+            TASK_LABELS+=("[✓] PostgreSQL database (already installed and running)")
+        elif is_pg_installed; then
+            TASK_LABELS+=("[✓] PostgreSQL database (installed, not running)")
+        else
+            TASK_LABELS+=("[ ] Build and install PostgreSQL database from source")
+            TASKS+=("database")
+        fi
+
+        TASK_LABELS+=("[ ] Clone repositories and configure remotes")
+        TASKS+=("repos")
+
+        # --- Show plan and ask for confirmation ---
+        echo ""
+        echo "The following actions will be performed:"
+        echo ""
+        for label in "${TASK_LABELS[@]}"; do
+            echo "  $label"
+        done
+        echo ""
+
+        read -r -p "Proceed? [Y/n] " REPLY
+        REPLY="${REPLY:-Y}"
+        if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            exit 0
+        fi
+
+        echo ""
+
+        # --- Execute tasks in order ---
+        for task in "${TASKS[@]}"; do
+            case "$task" in
+                zip)    install_zip ;;
+                git)    install_git ;;
+                sdkman) install_sdkman ;;
+                nvm)    install_nvm ;;
+                claude) install_claude ;;
+                heroku) install_heroku ;;
+                database)
+                    database_build
+                    database_install
+                    ;;
+                repos)  repo_install ;;
+            esac
+        done
         ;;
     *)
         echo "Unknown command: $1" >&2
