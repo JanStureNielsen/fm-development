@@ -21,6 +21,8 @@ is_nvm_installed()    { [[ -d "${NVM_DIR:-$HOME/.nvm}" ]]; }
 is_claude_installed() { command -v claude &>/dev/null; }
 is_heroku_installed() { command -v heroku &>/dev/null; }
 is_doctl_installed()  { command -v doctl &>/dev/null; }
+is_gh_installed()     { command -v gh &>/dev/null; }
+is_wrangler_installed() { command -v wrangler &>/dev/null; }
 is_pg_installed()     { [[ -x "$PG_PREFIX/bin/psql" ]]; }
 is_pg_running()       { pgrep -x postgres &>/dev/null; }
 
@@ -54,6 +56,8 @@ Commands:
   claude              Install Claude Code
   heroku              Install Heroku CLI
   doctl               Install DigitalOcean CLI
+  gh                  Install GitHub CLI
+  wrangler            Install Cloudflare Wrangler CLI
   repo install        Clone repositories and configure remotes
   repo update         Fetch and pull latest code for all repositories
   repo remotes        Show remotes for all repositories
@@ -237,12 +241,50 @@ install_doctl() {
     esac
 }
 
+install_gh() {
+    step "Installing GitHub CLI (gh)"
+    if command -v gh &>/dev/null; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        brew)
+            brew install gh
+            ;;
+        zypper)
+            sudo zypper install -y gh
+            ;;
+        apt)
+            sudo mkdir -p -m 755 /etc/apt/keyrings
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+            sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt-get update && sudo apt-get install -y gh
+            ;;
+        dnf)
+            sudo dnf install -y gh
+            ;;
+    esac
+}
+
+install_wrangler() {
+    step "Installing Cloudflare Wrangler CLI"
+    if command -v wrangler &>/dev/null; then
+        echo "    Already installed"
+        return
+    fi
+    npm install -g wrangler
+}
+
 setup_toolchain() {
     install_sdkman
     install_nvm
     install_claude
     install_heroku
     install_doctl
+    install_gh
+    install_wrangler
 }
 
 # ============================================================
@@ -695,6 +737,8 @@ EOF
     claude)  install_claude ;;
     heroku)  install_heroku ;;
     doctl)   install_doctl ;;
+    gh)      install_gh ;;
+    wrangler) install_wrangler ;;
     pg|postgresql|database)
         shift
         case "${1:-}" in
@@ -743,6 +787,8 @@ EOF
         add_task claude is_claude_installed "Install Claude Code"
         add_task heroku is_heroku_installed "Install Heroku CLI"
         add_task doctl  is_doctl_installed  "Install DigitalOcean CLI (doctl)"
+        add_task gh     is_gh_installed     "Install GitHub CLI (gh)"
+        add_task wrangler is_wrangler_installed "Install Cloudflare Wrangler CLI"
 
         if is_pg_installed && is_pg_running; then
             TASK_LABELS+=("[✓] PostgreSQL database (already installed and running)")
@@ -801,6 +847,8 @@ EOF
                 claude) install_claude ;;
                 heroku) install_heroku ;;
                 doctl)  install_doctl ;;
+                gh)     install_gh ;;
+                wrangler) install_wrangler ;;
                 database)
                     database_build
                     database_install
