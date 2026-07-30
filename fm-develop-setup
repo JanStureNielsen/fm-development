@@ -10,6 +10,7 @@ PG_PREFIX="/usr/local/pgsql"
 PGDATA="$PG_PREFIX/data"
 REPO_URL="https://git.postgresql.org/git/postgresql.git"
 USER="JanStureNielsen"
+GITIGNORE_GLOBAL="$HOME/.gitignore_global"
 
 step() { echo "==> $*"; }
 
@@ -25,6 +26,13 @@ is_gh_installed()     { command -v gh &>/dev/null; }
 is_wrangler_installed() { command -v wrangler &>/dev/null; }
 is_pg_installed()     { [[ -x "$PG_PREFIX/bin/psql" ]]; }
 is_pg_running()       { pgrep -x postgres &>/dev/null; }
+is_git_configured() {
+    is_git_installed || return 1
+    [[ -n "$(git config --global --get user.name 2>/dev/null || true)" ]] || return 1
+    [[ -n "$(git config --global --get user.email 2>/dev/null || true)" ]] || return 1
+    [[ -n "$(git config --global --get core.excludesfile 2>/dev/null || true)" ]] || return 1
+    [[ -f "$GITIGNORE_GLOBAL" ]]
+}
 
 configure_path() {
     step "Configuring PATH"
@@ -50,7 +58,8 @@ Bootstrap the Flexemarkets development environment.
 Commands:
   (none)              Show checklist and install everything that is missing
   zip                 Install zip
-  git                 Install git
+  git install         Install git
+  git config          Configure global git settings and ignore patterns
   sdkman              Install SDKMAN (Java, Maven)
   nvm                 Install nvm (Node.js)
   claude              Install Claude Code
@@ -155,6 +164,127 @@ install_git() {
         dnf)     sudo dnf install -y git ;;
         brew)    brew install git ;;
     esac
+}
+
+# ============================================================
+# git config — global git settings and ignore patterns
+# ============================================================
+
+# Patterns written to (or merged into) the global gitignore.
+GITIGNORE_PATTERNS=$(cat <<'IGNORE'
+# Claude Code
+**/.claude/settings.local.json
+
+# Eclipse / JDT
+.project
+.classpath
+.factorypath
+.settings/
+.apt_generated/
+.apt_generated_tests/
+
+# IntelliJ
+.idea/
+*.iml
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Vim
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Runtime log output
+logs/
+*.log
+
+# Patch / merge leftovers
+*.orig
+*.rej
+IGNORE
+)
+
+# Set a global git option only if it has no value yet.
+git_config_default() {
+    local key="$1" value="$2" current
+    current="$(git config --global --get "$key" 2>/dev/null || true)"
+    if [[ -n "$current" ]]; then
+        echo "    $key = $current (already set)"
+    else
+        git config --global "$key" "$value"
+        echo "    $key = $value"
+    fi
+}
+
+# Prompt for a global git option only if it has no value yet.
+git_config_prompt() {
+    local key="$1" prompt="$2" current
+    current="$(git config --global --get "$key" 2>/dev/null || true)"
+    if [[ -z "$current" ]]; then
+        read -r -p "    $prompt: " current
+        if [[ -z "$current" ]]; then
+            echo "    $key left unset — set it with: git config --global $key '...'"
+            return
+        fi
+        git config --global "$key" "$current"
+    fi
+    echo "    $key = $current"
+}
+
+configure_git() {
+    if ! is_git_installed; then
+        echo "ERROR: git is not installed."
+        echo "Run '$(basename "$0") git install' first."
+        exit 1
+    fi
+
+    step "Configuring global git identity"
+    git_config_prompt user.name  "Full name for git commits"
+    git_config_prompt user.email "Email address for git commits"
+
+    step "Configuring global git defaults"
+    git_config_default init.defaultBranch main
+    git_config_default core.excludesfile "$GITIGNORE_GLOBAL"
+
+    step "Configuring global gitignore ($GITIGNORE_GLOBAL)"
+    if [[ ! -f "$GITIGNORE_GLOBAL" ]]; then
+        echo "$GITIGNORE_PATTERNS" > "$GITIGNORE_GLOBAL"
+        echo "    Created with $(grep -cvE '^\s*(#|$)' "$GITIGNORE_GLOBAL") patterns"
+    else
+        # Append only the patterns that are not already present, so a
+        # hand-edited file keeps its own additions.
+        local missing=()
+        while IFS= read -r pattern; do
+            [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+            grep -qxF "$pattern" "$GITIGNORE_GLOBAL" || missing+=("$pattern")
+        done <<< "$GITIGNORE_PATTERNS"
+
+        if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "    Already up to date"
+        else
+            {
+                echo ""
+                echo "# Added by fm-develop-setup"
+                printf '%s\n' "${missing[@]}"
+            } >> "$GITIGNORE_GLOBAL"
+            echo "    Appended ${#missing[@]} pattern(s): ${missing[*]}"
+        fi
+    fi
+
+    step "Configuring GitHub credential helper"
+    if ! is_gh_installed; then
+        echo "    gh not installed — run '$(basename "$0") gh', then 'gh auth login'"
+    elif ! gh auth status &>/dev/null; then
+        echo "    gh not authenticated — run 'gh auth login' (it configures git credentials)"
+    else
+        gh auth setup-git
+        echo "    git credentials for github.com handled by gh"
+    fi
 }
 
 # ============================================================
@@ -731,7 +861,24 @@ EOF
         esac
         ;;
     zip)     install_zip ;;
-    git)     install_git ;;
+    git)
+        shift
+        case "${1:-}" in
+            install) shift; install_git "$@" ;;
+            config)  shift; configure_git "$@" ;;
+            -h|--help|"")
+                cat <<EOF
+Usage: $(basename "$0") git <command>
+
+Commands:
+  install   Install git
+  config    Configure global git settings and ignore patterns
+EOF
+                exit 0
+                ;;
+            *) echo "Unknown git command: $1" >&2; exit 1 ;;
+        esac
+        ;;
     sdkman)  install_sdkman ;;
     nvm)     install_nvm ;;
     claude)  install_claude ;;
@@ -789,6 +936,8 @@ EOF
         add_task doctl  is_doctl_installed  "Install DigitalOcean CLI (doctl)"
         add_task gh     is_gh_installed     "Install GitHub CLI (gh)"
         add_task wrangler is_wrangler_installed "Install Cloudflare Wrangler CLI"
+        # After gh, so the credential helper can be configured; before repos are cloned.
+        add_task gitconfig is_git_configured "Configure global git settings and ignore patterns" "already configured"
 
         if is_pg_installed && is_pg_running; then
             TASK_LABELS+=("[✓] PostgreSQL database (already installed and running)")
@@ -849,6 +998,7 @@ EOF
                 doctl)  install_doctl ;;
                 gh)     install_gh ;;
                 wrangler) install_wrangler ;;
+                gitconfig) configure_git ;;
                 database)
                     database_build
                     database_install

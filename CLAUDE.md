@@ -11,6 +11,8 @@ This is the **fm-development** repo — a single script for bootstrapping the Fl
 A unified CLI with subcommands:
 
 - **(no args)** — Install toolchain and clone all repos (runs toolchain + `repo install`).
+- **git install** — Install git via the platform package manager.
+- **git config** — Configure global git settings: prompts for `user.name`/`user.email` if unset, sets `init.defaultBranch=main` and `core.excludesfile=~/.gitignore_global`, writes/merges the global ignore patterns, and runs `gh auth setup-git` for the GitHub credential helper.
 - **repo install** — Clone FM repositories and configure fork remotes (upstream = org, origin = user fork).
 - **repo update** — Fetch all remotes and pull latest code for all repositories.
 - **database build** — Install build deps, clone/update PostgreSQL source, compile, install binaries + contrib, and configure PATH. Requires sudo.
@@ -28,12 +30,26 @@ Installed by the default command (no args):
 - **Claude Code** — via npm
 - **Heroku CLI** — via official standalone installer (not npm; the npm package is outdated)
 
+## Global Git Configuration
+
+Applied by `git config` (and by the default command, after `gh` and before repos are cloned):
+
+| Setting | Value |
+|---|---|
+| `user.name` / `user.email` | Prompted if unset; left alone if already set |
+| `init.defaultBranch` | `main` |
+| `core.excludesfile` | `~/.gitignore_global` |
+| credential helper | `gh auth setup-git` (skipped with a hint if gh is missing or unauthenticated) |
+
+The ignore patterns live in the `GITIGNORE_PATTERNS` heredoc in the script — Claude Code local settings, Eclipse/JDT, IntelliJ, Emacs, Vim, macOS, log output, and patch/merge leftovers. Add new patterns there, not by hand-editing `~/.gitignore_global`; a rerun appends anything missing.
+
 ## Conventions
 
 - Uses `set -euo pipefail` and `#!/usr/bin/env bash`.
 - Operates relative to parent directory (`$SCRIPT_DIR/..`), not the current working directory.
 - The `step()` function pattern (`step() { echo "==> $*"; }`) is used for progress output.
 - Git remote convention: `upstream` = adhocmarkets org repo, `origin` = developer's personal fork.
+- Every command is idempotent: existing global git settings are never overwritten, and the global gitignore is merged (missing patterns appended under `# Added by fm-develop-setup`) rather than clobbered.
 - PostgreSQL prefix variable is `PG_PREFIX`, not `PREFIX` — nvm conflicts with `PREFIX` env var.
 
 ## Related Repositories (cloned by repo install)
