@@ -39,6 +39,7 @@ Applied by `git config` (and by the default command, after `gh` and before repos
 | `user.name` / `user.email` | Prompted if unset; left alone if already set |
 | `init.defaultBranch` | `main` |
 | `core.excludesfile` | `~/.gitignore_global` |
+| `checkout.defaultRemote` | `origin` — with the upstream/origin fork layout, `git checkout <branch>` would otherwise be ambiguous |
 | credential helper | `gh auth setup-git` (skipped with a hint if gh is missing or unauthenticated) |
 
 The ignore patterns live in the `GITIGNORE_PATTERNS` heredoc in the script — Claude Code local settings, Eclipse/JDT, IntelliJ, Emacs, Vim, macOS, log output, and patch/merge leftovers. Add new patterns there, not by hand-editing `~/.gitignore_global`; a rerun appends anything missing.

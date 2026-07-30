@@ -31,6 +31,7 @@ is_git_configured() {
     [[ -n "$(git config --global --get user.name 2>/dev/null || true)" ]] || return 1
     [[ -n "$(git config --global --get user.email 2>/dev/null || true)" ]] || return 1
     [[ -n "$(git config --global --get core.excludesfile 2>/dev/null || true)" ]] || return 1
+    [[ -n "$(git config --global --get checkout.defaultRemote 2>/dev/null || true)" ]] || return 1
     [[ -f "$GITIGNORE_GLOBAL" ]]
 }
 
@@ -250,6 +251,8 @@ configure_git() {
     step "Configuring global git defaults"
     git_config_default init.defaultBranch main
     git_config_default core.excludesfile "$GITIGNORE_GLOBAL"
+    # Fork layout: branches resolve against the developer's fork, not upstream.
+    git_config_default checkout.defaultRemote origin
 
     step "Configuring global gitignore ($GITIGNORE_GLOBAL)"
     if [[ ! -f "$GITIGNORE_GLOBAL" ]]; then
