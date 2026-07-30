@@ -1,0 +1,1118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source root that repos are cloned into. Two supported layouts:
+#
+#   ahm/fm-develop-setup                  script loose in the root -> root is SCRIPT_DIR
+#   ahm/fm-development/fm-develop-setup   script inside its own checkout -> root is the parent
+#
+# This used to be an unconditional "$SCRIPT_DIR/..", which for the loose
+# layout resolved one level too high and scattered the clones into the
+# root's parent (~/src instead of ~/src/ahm). Set FM_SRC_DIR to override.
+if [[ -n "${FM_SRC_DIR:-}" ]]; then
+    PARENT_DIR="$(cd "$FM_SRC_DIR" && pwd)"
+elif [[ -e "$SCRIPT_DIR/.git" ]]; then
+    PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PARENT_DIR="$SCRIPT_DIR"
+fi
+
+# Defaults
+SOURCE_DIR="$PARENT_DIR/postgresql"
+PG_PREFIX="/usr/local/pgsql"
+PGDATA="$PG_PREFIX/data"
+REPO_URL="https://git.postgresql.org/git/postgresql.git"
+USER="JanStureNielsen"
+GITIGNORE_GLOBAL="$HOME/.gitignore_global"
+
+step() { echo "==> $*"; }
+
+# --- Status helpers ---
+is_zip_installed()  { command -v zip &>/dev/null; }
+is_git_installed()  { command -v git &>/dev/null; }
+is_sdkman_installed() { [[ -d "$HOME/.sdkman" ]]; }
+is_nvm_installed()    { [[ -d "${NVM_DIR:-$HOME/.nvm}" ]]; }
+is_claude_installed() { command -v claude &>/dev/null; }
+is_heroku_installed() { command -v heroku &>/dev/null; }
+is_doctl_installed()  { command -v doctl &>/dev/null; }
+is_gh_installed()     { command -v gh &>/dev/null; }
+is_wrangler_installed() { command -v wrangler &>/dev/null; }
+is_pg_installed()     { [[ -x "$PG_PREFIX/bin/psql" ]]; }
+is_pg_running()       { pgrep -x postgres &>/dev/null; }
+is_git_configured() {
+    is_git_installed || return 1
+    [[ -n "$(git config --global --get user.name 2>/dev/null || true)" ]] || return 1
+    [[ -n "$(git config --global --get user.email 2>/dev/null || true)" ]] || return 1
+    [[ -n "$(git config --global --get core.excludesfile 2>/dev/null || true)" ]] || return 1
+    [[ -n "$(git config --global --get checkout.defaultRemote 2>/dev/null || true)" ]] || return 1
+    [[ -f "$GITIGNORE_GLOBAL" ]]
+}
+
+# Shell rc file to write persistent settings into.
+#
+# ~/.bashrc, not ~/.profile: ~/.profile is read only by *login* shells, so a
+# normal terminal (non-login interactive) never saw $PG_PREFIX/bin and psql
+# appeared to be missing. /etc/profile sources ~/.bashrc, so putting it in
+# ~/.bashrc covers interactive *and* login shells. Fall back to ~/.profile
+# only when there is no ~/.bashrc.
+shell_rc() {
+    if [[ -f "$HOME/.bashrc" ]]; then
+        echo "$HOME/.bashrc"
+    else
+        echo "$HOME/.profile"
+    fi
+}
+
+configure_path() {
+    step "Configuring PATH"
+    PROFILE="$(shell_rc)"
+    if ! grep -qF "$PG_PREFIX/bin" "$PROFILE" 2>/dev/null; then
+        echo "" >> "$PROFILE"
+        echo "# PostgreSQL" >> "$PROFILE"
+        echo "export PATH=\"$PG_PREFIX/bin:\$PATH\"" >> "$PROFILE"
+        echo "    Added $PG_PREFIX/bin to $PROFILE"
+    else
+        echo "    Already in $PROFILE"
+    fi
+    export PATH="$PG_PREFIX/bin:$PATH"
+    echo "    Run 'source $PROFILE' or start a new shell to use psql."
+}
+
+# ============================================================
+# aliases — source the FM application aliases from the shell rc
+# ============================================================
+# fm-robots ships the alias definitions; this only wires them up. The file
+# builds one alias per ~/.fm/fm-*.jar (fm-server, fm-robots-server, fm-maker,
+# ...) plus fm -> fm-manager, so new jars are picked up without touching the
+# rc file again. Sourced by path rather than copied, so a "repo update" that
+# changes the aliases takes effect on the next shell.
+FM_ALIASES_REL="fm-robots/etc/fm/fm-aliases.sh"
+FM_ALIASES_MARKER="# FM application aliases"
+
+# Match the *absolute* path for the current source root, not just the relative
+# tail. The root can move, and a line pointing at an old checkout still
+# contains the relative tail -- so matching the tail reported "configured"
+# while the [[ -f ]] guard in that line silently skipped a file that was no
+# longer there, leaving no aliases and no error.
+is_aliases_configured() { grep -qF "$PARENT_DIR/$FM_ALIASES_REL" "$(shell_rc)" 2>/dev/null; }
+
+configure_aliases() {
+    step "Configuring FM application aliases"
+
+    local aliases_file="$PARENT_DIR/$FM_ALIASES_REL"
+    if [[ ! -f "$aliases_file" ]]; then
+        echo "    SKIP: $aliases_file not found (clone fm-robots first)"
+        return
+    fi
+
+    local rc
+    rc="$(shell_rc)"
+    if grep -qF "$aliases_file" "$rc" 2>/dev/null; then
+        echo "    Already sourced from $rc"
+    else
+        # Drop any line left behind by a previous source root before appending,
+        # so moving the checkout updates the rc file instead of accumulating
+        # dead source lines.
+        if grep -qF "$FM_ALIASES_REL" "$rc" 2>/dev/null; then
+            local tmp
+            tmp="$(mktemp)"
+            grep -vF -e "$FM_ALIASES_MARKER" -e "$FM_ALIASES_REL" "$rc" > "$tmp" || true
+            cat "$tmp" > "$rc"
+            rm -f "$tmp"
+            echo "    Replaced a stale alias source line in $rc"
+        fi
+        {
+            echo ""
+            echo "$FM_ALIASES_MARKER (fm-server, fm-robots-server, fm-maker, ...)"
+            echo "[[ -f \"$aliases_file\" ]] && source \"$aliases_file\""
+        } >> "$rc"
+        echo "    Added source line to $rc"
+    fi
+
+    if [[ ! -d "$HOME/.fm" ]]; then
+        echo "    NOTE: ~/.fm does not exist yet — aliases appear once the jars are built."
+    fi
+    echo "    Run 'source $rc' or start a new shell to use the aliases."
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [COMMAND]
+
+Bootstrap the Flexemarkets development environment.
+
+Commands:
+  (none)              Show checklist and install everything that is missing
+  zip                 Install zip
+  git install         Install git
+  git config          Configure global git settings and ignore patterns
+  sdkman              Install SDKMAN (Java, Maven)
+  nvm                 Install nvm (Node.js)
+  claude              Install Claude Code
+  heroku              Install Heroku CLI
+  doctl               Install DigitalOcean CLI
+  gh                  Install GitHub CLI
+  wrangler            Install Cloudflare Wrangler CLI
+  repo install        Clone repositories and configure remotes
+  repo update         Fetch and pull latest code for all repositories
+  repo remotes        Show remotes for all repositories
+  aliases             Source the FM application aliases from the shell rc file
+  pg build            Build PostgreSQL from source
+  pg install          Initialize database, create service, roles, and databases
+  pg load             Load PostgreSQL backup files
+  pg delete           Stop service and remove all data, binaries, and source
+
+Options:
+  -u, --user USERNAME   GitHub username for fork (default: $USER)
+  --source DIR          PostgreSQL source directory (default: $SOURCE_DIR)
+  --prefix DIR          PostgreSQL install prefix (default: $PG_PREFIX)
+  -h, --help            Show this help message
+EOF
+    exit 0
+}
+
+# --- Parse global options ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -u|--user) USER="$2"; shift 2 ;;
+        --source) SOURCE_DIR="$2"; shift 2 ;;
+        --prefix) PG_PREFIX="$2"; PGDATA="$PG_PREFIX/data"; shift 2 ;;
+        -h|--help) usage ;;
+        -*) echo "Unknown option: $1" >&2; exit 1 ;;
+        *) break ;;
+    esac
+done
+
+# --- OS detection ---
+detect_os() {
+    OS="$(uname -s)"
+    if [[ "$OS" == "Linux" ]]; then
+        if command -v zypper &>/dev/null; then
+            PKG_MGR=zypper
+        elif command -v apt-get &>/dev/null; then
+            PKG_MGR=apt
+        elif command -v dnf &>/dev/null; then
+            PKG_MGR=dnf
+        else
+            echo "ERROR: No supported package manager found (zypper/apt/dnf)"
+            exit 1
+        fi
+        NCPU="$(nproc)"
+    elif [[ "$OS" == "Darwin" ]]; then
+        PKG_MGR=brew
+        NCPU="$(sysctl -n hw.ncpu)"
+    else
+        echo "ERROR: Unsupported OS: $OS"
+        exit 1
+    fi
+}
+
+# --- Repo list (shared by repo install and repo update) ---
+# repo_name  local_dir  has_upstream  org
+#
+# org is the GitHub organization the repo is cloned from. It affects the clone
+# URL only -- the local layout stays flat, with every repo directly under the
+# source root. fm-sdk lives in the flexemarkets org; adhocmarkets/fm-sdk still
+# resolves by redirect, but flexemarkets is the canonical home.
+REPOS=(
+    "fm-data        fm-server              yes  adhocmarkets"
+    "fm-ui          fm-ui                  yes  adhocmarkets"
+    "fm-robots      fm-robots              yes  adhocmarkets"
+    "fm-robots-container fm-robots-server   no  adhocmarkets"
+    "fm-sdk         fm-sdk                 yes  flexemarkets"
+    "fm-administration fm-administration   yes  adhocmarkets"
+    "fm-development fm-development         yes  adhocmarkets"
+)
+
+# ============================================================
+# Install zip
+# ============================================================
+install_zip() {
+    step "Installing zip"
+    if is_zip_installed; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        zypper)  sudo zypper install -y zip ;;
+        apt)     sudo apt-get update && sudo apt-get install -y zip ;;
+        dnf)     sudo dnf install -y zip ;;
+        brew)    brew install zip ;;
+    esac
+}
+
+# ============================================================
+# Install git
+# ============================================================
+install_git() {
+    step "Installing git"
+    if is_git_installed; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        zypper)  sudo zypper install -y git ;;
+        apt)     sudo apt-get update && sudo apt-get install -y git ;;
+        dnf)     sudo dnf install -y git ;;
+        brew)    brew install git ;;
+    esac
+}
+
+# ============================================================
+# git config — global git settings and ignore patterns
+# ============================================================
+
+# Patterns written to (or merged into) the global gitignore.
+GITIGNORE_PATTERNS=$(cat <<'IGNORE'
+# Claude Code
+**/.claude/settings.local.json
+
+# Eclipse / JDT
+.project
+.classpath
+.factorypath
+.settings/
+.apt_generated/
+.apt_generated_tests/
+
+# IntelliJ
+.idea/
+*.iml
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Vim
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Runtime log output
+logs/
+*.log
+
+# Patch / merge leftovers
+*.orig
+*.rej
+IGNORE
+)
+
+# Set a global git option only if it has no value yet.
+git_config_default() {
+    local key="$1" value="$2" current
+    current="$(git config --global --get "$key" 2>/dev/null || true)"
+    if [[ -n "$current" ]]; then
+        echo "    $key = $current (already set)"
+    else
+        git config --global "$key" "$value"
+        echo "    $key = $value"
+    fi
+}
+
+# Prompt for a global git option only if it has no value yet.
+git_config_prompt() {
+    local key="$1" prompt="$2" current
+    current="$(git config --global --get "$key" 2>/dev/null || true)"
+    if [[ -z "$current" ]]; then
+        read -r -p "    $prompt: " current
+        if [[ -z "$current" ]]; then
+            echo "    $key left unset — set it with: git config --global $key '...'"
+            return
+        fi
+        git config --global "$key" "$current"
+    fi
+    echo "    $key = $current"
+}
+
+configure_git() {
+    if ! is_git_installed; then
+        echo "ERROR: git is not installed."
+        echo "Run '$(basename "$0") git install' first."
+        exit 1
+    fi
+
+    step "Configuring global git identity"
+    git_config_prompt user.name  "Full name for git commits"
+    git_config_prompt user.email "Email address for git commits"
+
+    step "Configuring global git defaults"
+    git_config_default init.defaultBranch main
+    git_config_default core.excludesfile "$GITIGNORE_GLOBAL"
+    # Fork layout: branches resolve against the developer's fork, not upstream.
+    git_config_default checkout.defaultRemote origin
+
+    step "Configuring global gitignore ($GITIGNORE_GLOBAL)"
+    if [[ ! -f "$GITIGNORE_GLOBAL" ]]; then
+        echo "$GITIGNORE_PATTERNS" > "$GITIGNORE_GLOBAL"
+        echo "    Created with $(grep -cvE '^\s*(#|$)' "$GITIGNORE_GLOBAL") patterns"
+    else
+        # Append only the patterns that are not already present, so a
+        # hand-edited file keeps its own additions.
+        local missing=()
+        while IFS= read -r pattern; do
+            [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+            grep -qxF "$pattern" "$GITIGNORE_GLOBAL" || missing+=("$pattern")
+        done <<< "$GITIGNORE_PATTERNS"
+
+        if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "    Already up to date"
+        else
+            {
+                echo ""
+                echo "# Added by fm-develop-setup"
+                printf '%s\n' "${missing[@]}"
+            } >> "$GITIGNORE_GLOBAL"
+            echo "    Appended ${#missing[@]} pattern(s): ${missing[*]}"
+        fi
+    fi
+
+    step "Configuring GitHub credential helper"
+    if ! is_gh_installed; then
+        echo "    gh not installed — run '$(basename "$0") gh', then 'gh auth login'"
+    elif ! gh auth status &>/dev/null; then
+        echo "    gh not authenticated — run 'gh auth login' (it configures git credentials)"
+    else
+        gh auth setup-git
+        echo "    git credentials for github.com handled by gh"
+    fi
+}
+
+# ============================================================
+# Install toolchain components
+# ============================================================
+install_sdkman() {
+    step "Installing SDKMAN"
+    if [[ -d "$HOME/.sdkman" ]]; then
+        echo "    Already installed"
+    else
+        curl -s "https://get.sdkman.io" | bash
+    fi
+    export SDKMAN_DIR="$HOME/.sdkman"
+    set +u; source "$SDKMAN_DIR/bin/sdkman-init.sh"; set -u
+
+    step "Installing Java (latest) and Maven via SDKMAN"
+    set +u
+    sdk install java < /dev/null || true
+    sdk install maven < /dev/null || true
+    set -u
+}
+
+install_nvm() {
+    step "Installing nvm"
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    if [[ -d "$NVM_DIR" ]]; then
+        echo "    Already installed"
+    else
+        mkdir -p "$NVM_DIR"
+        curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh" | bash
+    fi
+    set +u; source "$NVM_DIR/nvm.sh"; set -u
+
+    step "Installing Node.js (latest LTS) via nvm"
+    set +u
+    nvm install --lts
+    nvm use --lts
+    set -u
+}
+
+install_claude() {
+    step "Installing Claude Code"
+    if command -v claude &>/dev/null; then
+        echo "    Already installed"
+    else
+        npm install -g @anthropic-ai/claude-code
+    fi
+}
+
+install_heroku() {
+    step "Installing Heroku CLI"
+    if command -v heroku &>/dev/null; then
+        echo "    Already installed"
+    else
+        curl https://cli-assets.heroku.com/install.sh | bash
+    fi
+}
+
+install_doctl() {
+    step "Installing DigitalOcean CLI (doctl)"
+    if command -v doctl &>/dev/null; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        brew)
+            brew install doctl
+            ;;
+        *)
+            local version
+            version="$(curl -s https://api.github.com/repos/digitalocean/doctl/releases/latest | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')"
+            local arch
+            arch="$(uname -m)"
+            case "$arch" in
+                x86_64)  arch="amd64" ;;
+                aarch64) arch="arm64" ;;
+            esac
+            local tarball="doctl-${version}-linux-${arch}.tar.gz"
+            local url="https://github.com/digitalocean/doctl/releases/download/v${version}/${tarball}"
+            echo "    Downloading doctl v${version} for linux/${arch}"
+            curl -sL "$url" | sudo tar xz -C /usr/local/bin
+            ;;
+    esac
+}
+
+install_gh() {
+    step "Installing GitHub CLI (gh)"
+    if command -v gh &>/dev/null; then
+        echo "    Already installed"
+        return
+    fi
+    detect_os
+    case "$PKG_MGR" in
+        brew)
+            brew install gh
+            ;;
+        zypper)
+            sudo zypper install -y gh
+            ;;
+        apt)
+            sudo mkdir -p -m 755 /etc/apt/keyrings
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+            sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt-get update && sudo apt-get install -y gh
+            ;;
+        dnf)
+            sudo dnf install -y gh
+            ;;
+    esac
+}
+
+install_wrangler() {
+    step "Installing Cloudflare Wrangler CLI"
+    if command -v wrangler &>/dev/null; then
+        echo "    Already installed"
+        return
+    fi
+    npm install -g wrangler
+}
+
+setup_toolchain() {
+    install_sdkman
+    install_nvm
+    install_claude
+    install_heroku
+    install_doctl
+    install_gh
+    install_wrangler
+}
+
+# ============================================================
+# repo install — clone repositories and configure remotes
+# ============================================================
+repo_install() {
+    step "Cloning repositories into $PARENT_DIR"
+    cd "$PARENT_DIR"
+
+    for entry in "${REPOS[@]}"; do
+        read -r repo local_dir has_upstream org <<< "$entry"
+
+        if [[ -d "$PARENT_DIR/$local_dir" ]]; then
+            echo "SKIP $local_dir (already exists)"
+            continue
+        fi
+
+        if [[ "$has_upstream" == "yes" ]]; then
+            echo "CLONE $org/$repo -> $local_dir"
+            git clone "git@github.com:$org/$repo.git" "$local_dir"
+            cd "$local_dir"
+            git remote rename origin upstream
+            git remote add origin "git@github.com:$USER/$repo.git"
+            git fetch --all
+            cd "$PARENT_DIR"
+        elif [[ "$has_upstream" == "org" ]]; then
+            echo "CLONE $org/$repo -> $local_dir (org only)"
+            git clone "git@github.com:$org/$repo.git" "$local_dir"
+        else
+            echo "CLONE $USER/$repo -> $local_dir (no upstream)"
+            git clone "git@github.com:$USER/$repo.git" "$local_dir"
+        fi
+    done
+
+    echo "Done."
+}
+
+# ============================================================
+# repo update — fetch and pull latest code for all repositories
+# ============================================================
+repo_update() {
+    step "Updating repositories in $PARENT_DIR"
+    cd "$PARENT_DIR"
+
+    for entry in "${REPOS[@]}"; do
+        read -r repo local_dir has_upstream org <<< "$entry"
+
+        if [[ ! -d "$PARENT_DIR/$local_dir" ]]; then
+            echo "SKIP $local_dir (not cloned)"
+            continue
+        fi
+
+        echo "UPDATE $local_dir"
+        cd "$PARENT_DIR/$local_dir"
+        git fetch --all
+        git pull origin "$(git rev-parse --abbrev-ref HEAD)" || true
+        cd "$PARENT_DIR"
+    done
+
+    echo "Done."
+}
+
+# ============================================================
+# repo remotes — show remotes for all repositories
+# ============================================================
+repo_remotes() {
+    for entry in "${REPOS[@]}"; do
+        read -r repo local_dir _has_upstream _org <<< "$entry"
+
+        if [[ ! -d "$PARENT_DIR/$local_dir" ]]; then
+            echo "$local_dir: (not cloned)"
+            echo ""
+            continue
+        fi
+
+        echo "$local_dir:"
+        cd "$PARENT_DIR/$local_dir"
+        local default_remote
+        default_remote="$(git config --get checkout.defaultRemote 2>/dev/null || true)"
+        if [[ -z "$default_remote" ]]; then
+            default_remote="origin"
+        fi
+        while IFS= read -r remote; do
+            local url
+            url="$(git remote get-url "$remote" 2>/dev/null)"
+            if [[ "$remote" == "$default_remote" ]]; then
+                echo "  $remote  $url (default)"
+            else
+                echo "  $remote  $url"
+            fi
+        done < <(git remote)
+        echo ""
+        cd "$PARENT_DIR"
+    done
+}
+
+# ============================================================
+# database build — pull source, compile, install binaries
+# ============================================================
+database_build() {
+    detect_os
+    echo "    OS=$OS, package manager=$PKG_MGR, CPUs=$NCPU"
+
+    # --- Install build dependencies ---
+    step "Installing build dependencies"
+    case "$PKG_MGR" in
+        zypper)
+            sudo zypper install -y gcc make readline-devel zlib-devel libopenssl-devel bison flex libxml2-devel libxslt-devel libicu-devel git
+            ;;
+        apt)
+            sudo apt-get update
+            sudo apt-get install -y build-essential libreadline-dev zlib1g-dev libssl-dev bison flex libxml2-dev libxslt1-dev libicu-dev git
+            ;;
+        dnf)
+            sudo dnf install -y gcc make readline-devel zlib-devel openssl-devel bison flex libxml2-devel libxslt-devel libicu-devel git
+            ;;
+        brew)
+            brew install readline openssl icu4c pkg-config
+            ;;
+    esac
+
+    # --- Clone or update source ---
+    step "Preparing source in $SOURCE_DIR"
+    if [[ -d "$SOURCE_DIR/.git" ]]; then
+        echo "    Fetching latest tags"
+        git -C "$SOURCE_DIR" fetch --tags
+    else
+        echo "    Cloning repository"
+        git clone "$REPO_URL" "$SOURCE_DIR"
+    fi
+
+    # --- Checkout latest stable tag ---
+    step "Finding latest stable release tag"
+    LATEST_TAG="$(git -C "$SOURCE_DIR" tag -l 'REL_*' | grep -v -E 'BETA|RC|alpha' | sort -V | tail -1)"
+    if [[ -z "$LATEST_TAG" ]]; then
+        echo "ERROR: No stable REL_* tag found"
+        exit 1
+    fi
+    echo "    Tag: $LATEST_TAG"
+    git -C "$SOURCE_DIR" checkout "$LATEST_TAG"
+
+    # --- Configure ---
+    step "Configuring (--with-ssl=openssl)"
+    cd "$SOURCE_DIR"
+    if [[ "$OS" == "Darwin" ]]; then
+        OPENSSL_PREFIX="$(brew --prefix openssl 2>/dev/null || echo /usr/local/opt/openssl)"
+        ICU_PREFIX="$(brew --prefix icu4c 2>/dev/null || echo /usr/local/opt/icu4c)"
+        export PKG_CONFIG_PATH="${ICU_PREFIX}/lib/pkgconfig:${OPENSSL_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+        ./configure --prefix="$PG_PREFIX" --with-ssl=openssl \
+            --with-includes="$OPENSSL_PREFIX/include" \
+            --with-libraries="$OPENSSL_PREFIX/lib"
+    else
+        ./configure --prefix="$PG_PREFIX" --with-ssl=openssl
+    fi
+
+    # --- Build ---
+    step "Building (make -j$NCPU)"
+    make -j"$NCPU"
+
+    # --- Install ---
+    step "Installing to $PG_PREFIX"
+    sudo make install
+
+    # --- Build and install contrib extensions ---
+    step "Building contrib extensions"
+    make -C contrib -j"$NCPU"
+    sudo make -C contrib install
+
+    configure_path
+
+    echo ""
+    echo "PostgreSQL $LATEST_TAG built and installed to $PG_PREFIX"
+}
+
+# ============================================================
+# database install — initdb, service, roles, databases
+# ============================================================
+database_install() {
+    detect_os
+
+    PSQL="$PG_PREFIX/bin/psql"
+
+    if [[ ! -x "$PG_PREFIX/bin/initdb" ]]; then
+        echo "ERROR: $PG_PREFIX/bin/initdb not found."
+        echo "Run '$(basename "$0") database build' first."
+        exit 1
+    fi
+
+    if [[ -d "$PGDATA" ]]; then
+        echo "ERROR: $PGDATA already exists."
+        echo "Back up or remove it before running this command."
+        exit 1
+    fi
+
+    # --- Create postgres OS user ---
+    step "Ensuring postgres OS user exists"
+    if ! id postgres &>/dev/null; then
+        if [[ "$OS" == "Linux" ]]; then
+            sudo useradd --system --home-dir "$PG_PREFIX" --shell /bin/bash postgres
+        else
+            echo "    WARNING: postgres user does not exist. Create it manually on macOS."
+        fi
+    else
+        echo "    Already exists"
+    fi
+
+    # --- initdb ---
+    step "Initializing database cluster in $PGDATA"
+    sudo mkdir -p "$PGDATA"
+    sudo chown postgres:postgres "$PGDATA"
+    sudo su - postgres -c "'$PG_PREFIX/bin/initdb' -D '$PGDATA'"
+
+    # --- Configure pg_hba.conf ---
+    step "Configuring trust authentication"
+    cat <<'HBA' | sudo tee "$PGDATA/pg_hba.conf" > /dev/null
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            trust
+host    all             all             ::1/128                 trust
+HBA
+
+    # Configure unix_socket_directories to /tmp
+    if sudo grep -q '^#unix_socket_directories' "$PGDATA/postgresql.conf"; then
+        sudo sed -i "s|^#unix_socket_directories.*|unix_socket_directories = '/tmp'|" "$PGDATA/postgresql.conf"
+    else
+        echo "unix_socket_directories = '/tmp'" | sudo tee -a "$PGDATA/postgresql.conf" > /dev/null
+    fi
+
+    # --- Service setup and start ---
+    if [[ "$OS" == "Linux" ]]; then
+        step "Installing systemd service"
+        sudo tee /etc/systemd/system/postgresql.service > /dev/null <<EOF
+[Unit]
+Description=PostgreSQL database server
+After=network.target
+
+[Service]
+Type=forking
+User=postgres
+ExecStart=$PG_PREFIX/bin/pg_ctl start -D $PGDATA -l $PGDATA/server.log
+ExecStop=$PG_PREFIX/bin/pg_ctl stop -D $PGDATA -m fast
+ExecReload=$PG_PREFIX/bin/pg_ctl reload -D $PGDATA
+TimeoutSec=120
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        sudo systemctl daemon-reload
+        sudo systemctl enable postgresql
+
+        step "Starting PostgreSQL"
+        sudo systemctl start postgresql
+    else
+        step "Starting PostgreSQL"
+        sudo su - postgres -c "'$PG_PREFIX/bin/pg_ctl' start -D '$PGDATA' -l '$PGDATA/server.log'"
+        echo ""
+        echo "    macOS: To start PostgreSQL at login, create a LaunchAgent plist at"
+        echo "    ~/Library/LaunchAgents/org.postgresql.pgsql.plist"
+    fi
+
+    # Wait briefly for server to be ready
+    sleep 2
+
+    # --- Create roles ---
+    step "Creating role: jan (superuser)"
+    sudo su - postgres -c "'$PSQL' -c \"CREATE ROLE jan WITH LOGIN SUPERUSER;\"" 2>/dev/null || echo "    Role jan already exists"
+
+    step "Creating role: u4cv4dsie00kdu (superuser)"
+    sudo su - postgres -c "'$PSQL' -c \"CREATE ROLE u4cv4dsie00kdu WITH LOGIN SUPERUSER;\"" 2>/dev/null || echo "    Role u4cv4dsie00kdu already exists"
+
+    # --- Create database ---
+    step "Creating database: flexemarkets (owner: jan)"
+    sudo su - postgres -c "'$PSQL' -c \"CREATE DATABASE flexemarkets OWNER jan;\"" 2>/dev/null || echo "    Database flexemarkets already exists"
+
+    configure_path
+
+    step "Done!"
+    echo ""
+    echo "PostgreSQL installed to $PG_PREFIX"
+    echo "Data directory: $PGDATA"
+    echo "Connect with: psql -h /tmp flexemarkets"
+}
+
+# ============================================================
+# database load — load pg_restore backup files
+# ============================================================
+database_load() {
+    local OWNER="u4cv4dsie00kdu"
+    local ARGS=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--owner) OWNER="$2"; shift 2 ;;
+            -h|--help)
+                cat <<EOF
+Usage: $(basename "$0") database load [-o OWNER] <directory | backup-file ...>
+
+Options:
+  -o, --owner   Database owner (default: $OWNER)
+EOF
+                exit 0
+                ;;
+            -*) echo "Unknown option: $1" >&2; exit 1 ;;
+            *) ARGS+=("$1"); shift ;;
+        esac
+    done
+
+    if [[ ${#ARGS[@]} -eq 0 ]]; then
+        echo "Usage: $(basename "$0") database load [-o OWNER] <directory | backup-file ...>"
+        exit 1
+    fi
+
+    # If a single directory is given, load all files from it
+    local FILES=()
+    if [[ ${#ARGS[@]} -eq 1 && -d "${ARGS[0]}" ]]; then
+        for f in "${ARGS[0]}"/*; do
+            [[ -f "$f" ]] && FILES+=("$f")
+        done
+    else
+        FILES=("${ARGS[@]}")
+    fi
+
+    if [[ ${#FILES[@]} -eq 0 ]]; then
+        echo "No files found"
+        exit 1
+    fi
+
+    # Ensure owner role exists
+    if ! psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$OWNER'" | grep -q 1; then
+        echo "Creating role $OWNER"
+        createuser -s "$OWNER"
+    fi
+
+    echo "Loading ${#FILES[@]} backup(s) with owner $OWNER"
+    echo ""
+
+    local LOADED=0
+    local FAILED=0
+
+    for FILE in "${FILES[@]}"; do
+        if [[ ! -f "$FILE" ]]; then
+            echo "SKIP....: $FILE (not found)"
+            echo ""
+            FAILED=$((FAILED + 1))
+            continue
+        fi
+
+        local BASENAME
+        BASENAME=$(basename "$FILE")
+        local DATABASE="${BASENAME%%-*}"
+
+        echo "DB,.....: $DATABASE"
+        echo "data....: $FILE"
+
+        dropdb "$DATABASE" 2>/dev/null || true
+
+        if ! createdb "$DATABASE" --owner "$OWNER" 2>&1; then
+            echo "FAILED..: $DATABASE (createdb)"
+            echo ""
+            FAILED=$((FAILED + 1))
+            continue
+        fi
+
+        # pg_restore returns non-zero on warnings; ignore exit code
+        pg_restore -d "$DATABASE" "$FILE" 2>&1 || true
+
+        echo "loaded..: $DATABASE"
+        LOADED=$((LOADED + 1))
+        echo ""
+    done
+
+    echo "Done: $LOADED loaded, $FAILED failed (${#FILES[@]} total)"
+}
+
+# ============================================================
+# database delete — stop service, remove data and binaries
+# ============================================================
+database_delete() {
+    detect_os
+
+    echo "WARNING: This will permanently destroy ALL data in $PGDATA"
+    echo "         and remove PostgreSQL binaries from $PG_PREFIX."
+    echo ""
+    read -r -p "Type 'yes' to confirm: " CONFIRM
+    if [[ "$CONFIRM" != "yes" ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    # --- Stop service ---
+    step "Stopping PostgreSQL"
+    if [[ "$OS" == "Linux" ]]; then
+        sudo systemctl stop postgresql 2>/dev/null || true
+        sudo systemctl disable postgresql 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/postgresql.service
+        sudo systemctl daemon-reload
+    else
+        sudo su - postgres -c "'$PG_PREFIX/bin/pg_ctl' stop -D '$PGDATA' -m fast" 2>/dev/null || true
+    fi
+
+    # --- Remove data directory ---
+    if [[ -d "$PGDATA" ]]; then
+        step "Removing data directory $PGDATA"
+        sudo rm -rf "$PGDATA"
+    fi
+
+    # --- Remove binaries ---
+    if [[ -d "$PG_PREFIX" ]]; then
+        step "Removing $PG_PREFIX"
+        sudo rm -rf "$PG_PREFIX"
+    fi
+
+    # --- Remove source ---
+    if [[ -d "$SOURCE_DIR" ]]; then
+        step "Removing source directory $SOURCE_DIR"
+        rm -rf "$SOURCE_DIR"
+    fi
+
+    step "Done. PostgreSQL has been completely removed."
+}
+
+# ============================================================
+# Dispatch
+# ============================================================
+case "${1:-}" in
+    repo)
+        shift
+        case "${1:-}" in
+            install) shift; repo_install "$@" ;;
+            update)  shift; repo_update "$@" ;;
+            remotes) shift; repo_remotes "$@" ;;
+            -h|--help|"")
+                cat <<EOF
+Usage: $(basename "$0") repo <command>
+
+Commands:
+  install   Clone repositories and configure remotes
+  update    Fetch and pull latest code for all repositories
+  remotes   Show remotes for all repositories
+EOF
+                exit 0
+                ;;
+            *) echo "Unknown repo command: $1" >&2; exit 1 ;;
+        esac
+        ;;
+    aliases) configure_aliases ;;
+    zip)     install_zip ;;
+    git)
+        shift
+        case "${1:-}" in
+            install) shift; install_git "$@" ;;
+            config)  shift; configure_git "$@" ;;
+            -h|--help|"")
+                cat <<EOF
+Usage: $(basename "$0") git <command>
+
+Commands:
+  install   Install git
+  config    Configure global git settings and ignore patterns
+EOF
+                exit 0
+                ;;
+            *) echo "Unknown git command: $1" >&2; exit 1 ;;
+        esac
+        ;;
+    sdkman)  install_sdkman ;;
+    nvm)     install_nvm ;;
+    claude)  install_claude ;;
+    heroku)  install_heroku ;;
+    doctl)   install_doctl ;;
+    gh)      install_gh ;;
+    wrangler) install_wrangler ;;
+    pg|postgresql|database)
+        shift
+        case "${1:-}" in
+            build)   shift; database_build "$@" ;;
+            install) shift; database_install "$@" ;;
+            load)    shift; database_load "$@" ;;
+            delete)  shift; database_delete "$@" ;;
+            -h|--help|"")
+                cat <<EOF
+Usage: $(basename "$0") pg <command>
+
+Commands:
+  build     Build PostgreSQL from source
+  install   Initialize database, create service, roles, and databases
+  load      Load PostgreSQL backup files
+  delete    Stop service and remove all data, binaries, and source
+EOF
+                exit 0
+                ;;
+            *) echo "Unknown pg command: $1" >&2; exit 1 ;;
+        esac
+        ;;
+    "")
+        detect_os
+
+        # --- Build pre-flight checklist ---
+        TASKS=()
+        TASK_LABELS=()
+
+        # Helper: add a checklist item
+        # Usage: add_task <task_key> <is_installed_func> <label> [suffix_if_installed]
+        add_task() {
+            local key="$1" check="$2" label="$3" suffix="${4:-already installed}"
+            if $check; then
+                TASK_LABELS+=("[✓] $label ($suffix)")
+            else
+                TASK_LABELS+=("[ ] $label")
+                TASKS+=("$key")
+            fi
+        }
+
+        add_task zip    is_zip_installed    "Install zip"
+        add_task git    is_git_installed    "Install git"
+        add_task sdkman is_sdkman_installed "Install SDKMAN (Java, Maven)"
+        add_task nvm    is_nvm_installed    "Install nvm (Node.js)"
+        add_task claude is_claude_installed "Install Claude Code"
+        add_task heroku is_heroku_installed "Install Heroku CLI"
+        add_task doctl  is_doctl_installed  "Install DigitalOcean CLI (doctl)"
+        add_task gh     is_gh_installed     "Install GitHub CLI (gh)"
+        add_task wrangler is_wrangler_installed "Install Cloudflare Wrangler CLI"
+        # After gh, so the credential helper can be configured; before repos are cloned.
+        add_task gitconfig is_git_configured "Configure global git settings and ignore patterns" "already configured"
+
+        if is_pg_installed && is_pg_running; then
+            TASK_LABELS+=("[✓] PostgreSQL database (already installed and running)")
+        elif is_pg_installed; then
+            TASK_LABELS+=("[✓] PostgreSQL database (installed, not running)")
+        else
+            TASK_LABELS+=("[ ] Build and install PostgreSQL database from source")
+            TASKS+=("database")
+        fi
+
+        TASK_LABELS+=("Clone repositories and configure remotes:")
+        any_repo_needed=false
+        for entry in "${REPOS[@]}"; do
+            read -r repo local_dir _has_upstream _org <<< "$entry"
+            if [[ -d "$PARENT_DIR/$local_dir" ]]; then
+                TASK_LABELS+=("  [✓] $local_dir (already cloned)")
+            else
+                TASK_LABELS+=("  [ ] $local_dir")
+                any_repo_needed=true
+            fi
+        done
+        if "$any_repo_needed"; then
+            TASKS+=("repos")
+        fi
+
+        # After repos: the alias file lives in the fm-robots checkout.
+        add_task aliases is_aliases_configured "Configure FM application aliases" "already configured"
+
+        # --- Show plan and ask for confirmation ---
+        echo ""
+        echo "Unchecked items will be installed:"
+        echo ""
+        for label in "${TASK_LABELS[@]}"; do
+            echo "  $label"
+        done
+        echo ""
+
+        if [[ ${#TASKS[@]} -eq 0 ]]; then
+            echo "Everything is already installed."
+            exit 0
+        fi
+
+        read -r -p "Proceed? [Y/n] " REPLY
+        REPLY="${REPLY:-Y}"
+        if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            exit 0
+        fi
+
+        echo ""
+
+        # --- Execute tasks in order ---
+        for task in "${TASKS[@]}"; do
+            case "$task" in
+                zip)    install_zip ;;
+                git)    install_git ;;
+                sdkman) install_sdkman ;;
+                nvm)    install_nvm ;;
+                claude) install_claude ;;
+                heroku) install_heroku ;;
+                doctl)  install_doctl ;;
+                gh)     install_gh ;;
+                wrangler) install_wrangler ;;
+                gitconfig) configure_git ;;
+                database)
+                    database_build
+                    database_install
+                    ;;
+                repos)  repo_install ;;
+                aliases) configure_aliases ;;
+            esac
+        done
+        ;;
+    *)
+        echo "Unknown command: $1" >&2
+        echo "Run '$(basename "$0") --help' for usage."
+        exit 1
+        ;;
+esac
