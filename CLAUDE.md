@@ -13,6 +13,7 @@ A unified CLI with subcommands:
 - **(no args)** — Install toolchain and clone all repos (runs toolchain + `repo install`).
 - **repo install** — Clone FM repositories and configure fork remotes (upstream = org, origin = user fork).
 - **repo update** — Fetch all remotes and pull latest code for all repositories.
+- **aliases** — Wire the FM application aliases into the shell rc file. Appends a `source` line pointing at `fm-robots/etc/fm/fm-aliases.sh`, which defines one alias per `~/.fm/fm-*.jar` (`fm-server`, `fm-robots-server`, `fm-maker`, …) plus `fm` → `fm-manager`. Sourced by path, not copied, so alias changes from `repo update` take effect on the next shell, and newly built jars appear without re-running anything. Idempotent.
 - **database build** — Install build deps, clone/update PostgreSQL source, compile, install binaries + contrib, and configure PATH. Requires sudo.
 - **database install** — Run initdb, configure trust auth, set up systemd service (Linux) or launchctl guidance (macOS), create roles (`jan`, `u4cv4dsie00kdu`) and the `flexemarkets` database. Requires sudo.
 - **database load [-o OWNER] \<dir|files\>** — Load pg_restore backups. DB name derived from filename prefix (before first dash). Default owner: `u4cv4dsie00kdu`.
