@@ -2,7 +2,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source root that repos are cloned into. Two supported layouts:
+#
+#   ahm/fm-develop-setup                  script loose in the root -> root is SCRIPT_DIR
+#   ahm/fm-development/fm-develop-setup   script inside its own checkout -> root is the parent
+#
+# This used to be an unconditional "$SCRIPT_DIR/..", which for the loose
+# layout resolved one level too high and scattered the clones into the
+# root's parent (~/src instead of ~/src/ahm). Set FM_SRC_DIR to override.
+if [[ -n "${FM_SRC_DIR:-}" ]]; then
+    PARENT_DIR="$(cd "$FM_SRC_DIR" && pwd)"
+elif [[ -e "$SCRIPT_DIR/.git" ]]; then
+    PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PARENT_DIR="$SCRIPT_DIR"
+fi
 
 # Defaults
 SOURCE_DIR="$PARENT_DIR/postgresql"

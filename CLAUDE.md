@@ -31,7 +31,7 @@ Installed by the default command (no args):
 ## Conventions
 
 - Uses `set -euo pipefail` and `#!/usr/bin/env bash`.
-- Operates relative to parent directory (`$SCRIPT_DIR/..`), not the current working directory.
+- Operates relative to a resolved source root, not the current working directory. The root is the script's own directory when the script sits loose in the root, or its parent when the script is run from inside the `fm-development` checkout. `FM_SRC_DIR` overrides both.
 - The `step()` function pattern (`step() { echo "==> $*"; }`) is used for progress output.
 - Git remote convention: `upstream` = adhocmarkets org repo, `origin` = developer's personal fork.
 - PostgreSQL prefix variable is `PG_PREFIX`, not `PREFIX` — nvm conflicts with `PREFIX` env var.
