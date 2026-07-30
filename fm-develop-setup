@@ -89,8 +89,14 @@ configure_path() {
 # rc file again. Sourced by path rather than copied, so a "repo update" that
 # changes the aliases takes effect on the next shell.
 FM_ALIASES_REL="fm-robots/etc/fm/fm-aliases.sh"
+FM_ALIASES_MARKER="# FM application aliases"
 
-is_aliases_configured() { grep -qF "$FM_ALIASES_REL" "$(shell_rc)" 2>/dev/null; }
+# Match the *absolute* path for the current source root, not just the relative
+# tail. The root can move, and a line pointing at an old checkout still
+# contains the relative tail -- so matching the tail reported "configured"
+# while the [[ -f ]] guard in that line silently skipped a file that was no
+# longer there, leaving no aliases and no error.
+is_aliases_configured() { grep -qF "$PARENT_DIR/$FM_ALIASES_REL" "$(shell_rc)" 2>/dev/null; }
 
 configure_aliases() {
     step "Configuring FM application aliases"
@@ -103,12 +109,23 @@ configure_aliases() {
 
     local rc
     rc="$(shell_rc)"
-    if grep -qF "$FM_ALIASES_REL" "$rc" 2>/dev/null; then
+    if grep -qF "$aliases_file" "$rc" 2>/dev/null; then
         echo "    Already sourced from $rc"
     else
+        # Drop any line left behind by a previous source root before appending,
+        # so moving the checkout updates the rc file instead of accumulating
+        # dead source lines.
+        if grep -qF "$FM_ALIASES_REL" "$rc" 2>/dev/null; then
+            local tmp
+            tmp="$(mktemp)"
+            grep -vF -e "$FM_ALIASES_MARKER" -e "$FM_ALIASES_REL" "$rc" > "$tmp" || true
+            cat "$tmp" > "$rc"
+            rm -f "$tmp"
+            echo "    Replaced a stale alias source line in $rc"
+        fi
         {
             echo ""
-            echo "# FM application aliases (fm-server, fm-robots-server, fm-maker, ...)"
+            echo "$FM_ALIASES_MARKER (fm-server, fm-robots-server, fm-maker, ...)"
             echo "[[ -f \"$aliases_file\" ]] && source \"$aliases_file\""
         } >> "$rc"
         echo "    Added source line to $rc"
