@@ -136,14 +136,20 @@ detect_os() {
 }
 
 # --- Repo list (shared by repo install and repo update) ---
+# repo_name  local_dir  has_upstream  org
+#
+# org is the GitHub organization the repo is cloned from. It affects the clone
+# URL only -- the local layout stays flat, with every repo directly under the
+# source root. fm-sdk lives in the flexemarkets org; adhocmarkets/fm-sdk still
+# resolves by redirect, but flexemarkets is the canonical home.
 REPOS=(
-    "fm-data        fm-server              yes"
-    "fm-ui          fm-ui                  yes"
-    "fm-robots      fm-robots              yes"
-    "fm-robots-container fm-robots-container no"
-    "fm-sdk         fm-sdk                 yes"
-    "fm-administration fm-administration   yes"
-    "fm-development fm-development         yes"
+    "fm-data        fm-server              yes  adhocmarkets"
+    "fm-ui          fm-ui                  yes  adhocmarkets"
+    "fm-robots      fm-robots              yes  adhocmarkets"
+    "fm-robots-container fm-robots-container no  adhocmarkets"
+    "fm-sdk         fm-sdk                 yes  flexemarkets"
+    "fm-administration fm-administration   yes  adhocmarkets"
+    "fm-development fm-development         yes  adhocmarkets"
 )
 
 # ============================================================
@@ -320,7 +326,7 @@ repo_install() {
     cd "$PARENT_DIR"
 
     for entry in "${REPOS[@]}"; do
-        read -r repo local_dir has_upstream <<< "$entry"
+        read -r repo local_dir has_upstream org <<< "$entry"
 
         if [[ -d "$PARENT_DIR/$local_dir" ]]; then
             echo "SKIP $local_dir (already exists)"
@@ -328,16 +334,16 @@ repo_install() {
         fi
 
         if [[ "$has_upstream" == "yes" ]]; then
-            echo "CLONE adhocmarkets/$repo -> $local_dir"
-            git clone "git@github.com:adhocmarkets/$repo.git" "$local_dir"
+            echo "CLONE $org/$repo -> $local_dir"
+            git clone "git@github.com:$org/$repo.git" "$local_dir"
             cd "$local_dir"
             git remote rename origin upstream
             git remote add origin "git@github.com:$USER/$repo.git"
             git fetch --all
             cd "$PARENT_DIR"
         elif [[ "$has_upstream" == "org" ]]; then
-            echo "CLONE adhocmarkets/$repo -> $local_dir (org only)"
-            git clone "git@github.com:adhocmarkets/$repo.git" "$local_dir"
+            echo "CLONE $org/$repo -> $local_dir (org only)"
+            git clone "git@github.com:$org/$repo.git" "$local_dir"
         else
             echo "CLONE $USER/$repo -> $local_dir (no upstream)"
             git clone "git@github.com:$USER/$repo.git" "$local_dir"
@@ -355,7 +361,7 @@ repo_update() {
     cd "$PARENT_DIR"
 
     for entry in "${REPOS[@]}"; do
-        read -r repo local_dir has_upstream <<< "$entry"
+        read -r repo local_dir has_upstream org <<< "$entry"
 
         if [[ ! -d "$PARENT_DIR/$local_dir" ]]; then
             echo "SKIP $local_dir (not cloned)"
@@ -377,7 +383,7 @@ repo_update() {
 # ============================================================
 repo_remotes() {
     for entry in "${REPOS[@]}"; do
-        read -r repo local_dir _has_upstream <<< "$entry"
+        read -r repo local_dir _has_upstream _org <<< "$entry"
 
         if [[ ! -d "$PARENT_DIR/$local_dir" ]]; then
             echo "$local_dir: (not cloned)"
@@ -827,7 +833,7 @@ EOF
         TASK_LABELS+=("Clone repositories and configure remotes:")
         any_repo_needed=false
         for entry in "${REPOS[@]}"; do
-            read -r repo local_dir _has_upstream <<< "$entry"
+            read -r repo local_dir _has_upstream _org <<< "$entry"
             if [[ -d "$PARENT_DIR/$local_dir" ]]; then
                 TASK_LABELS+=("  [✓] $local_dir (already cloned)")
             else

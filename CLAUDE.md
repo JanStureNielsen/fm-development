@@ -33,20 +33,21 @@ Installed by the default command (no args):
 - Uses `set -euo pipefail` and `#!/usr/bin/env bash`.
 - Operates relative to a resolved source root, not the current working directory. The root is the script's own directory when the script sits loose in the root, or its parent when the script is run from inside the `fm-development` checkout. `FM_SRC_DIR` overrides both.
 - The `step()` function pattern (`step() { echo "==> $*"; }`) is used for progress output.
-- Git remote convention: `upstream` = adhocmarkets org repo, `origin` = developer's personal fork.
+- Git remote convention: `upstream` = the org repo, `origin` = developer's personal fork. The org is per-repo (the 4th `REPOS` field), not a global constant — most repos are under `adhocmarkets`, but `fm-sdk` is under `flexemarkets`.
+- Organization affects the clone URL only. The local layout is flat: every repo sits directly under the source root, with no per-org directories.
 - PostgreSQL prefix variable is `PG_PREFIX`, not `PREFIX` — nvm conflicts with `PREFIX` env var.
 
 ## Related Repositories (cloned by repo install)
 
-| Repo name | Local directory | Description |
-|---|---|---|
-| fm-data | fm-server | Server/backend |
-| fm-ui | fm-ui | Frontend UI |
-| fm-robots | fm-robots | Trading robots |
-| fm-robots-container | fm-robots-container | Robot container (user fork only) |
-| fm-sdk | fm-sdk | SDK |
-| fm-administration | fm-administration | Administration tools |
-| fm-development | fm-development | This repo — the development setup script |
+| Repo name | Org | Local directory | Description |
+|---|---|---|---|
+| fm-data | adhocmarkets | fm-server | Server/backend |
+| fm-ui | adhocmarkets | fm-ui | Frontend UI |
+| fm-robots | adhocmarkets | fm-robots | Trading robots |
+| fm-robots-container | adhocmarkets | fm-robots-container | Robot container (user fork only) |
+| fm-sdk | flexemarkets | fm-sdk | SDK |
+| fm-administration | adhocmarkets | fm-administration | Administration tools |
+| fm-development | adhocmarkets | fm-development | This repo — the development setup script |
 
 ## PostgreSQL Setup
 
