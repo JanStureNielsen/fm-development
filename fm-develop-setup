@@ -28,7 +28,16 @@ is_pg_running()       { pgrep -x postgres &>/dev/null; }
 
 configure_path() {
     step "Configuring PATH"
-    PROFILE="$HOME/.profile"
+    # ~/.bashrc, not ~/.profile: ~/.profile is read only by *login* shells, so a
+    # normal terminal (non-login interactive) never saw $PG_PREFIX/bin and psql
+    # appeared to be missing. /etc/profile sources ~/.bashrc, so putting it in
+    # ~/.bashrc covers interactive *and* login shells. Fall back to ~/.profile
+    # only when there is no ~/.bashrc.
+    if [[ -f "$HOME/.bashrc" ]]; then
+        PROFILE="$HOME/.bashrc"
+    else
+        PROFILE="$HOME/.profile"
+    fi
     if ! grep -qF "$PG_PREFIX/bin" "$PROFILE" 2>/dev/null; then
         echo "" >> "$PROFILE"
         echo "# PostgreSQL" >> "$PROFILE"

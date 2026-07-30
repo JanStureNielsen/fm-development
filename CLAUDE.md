@@ -54,4 +54,4 @@ Installed by the default command (no args):
 - Socket directory: `/tmp`
 - Connect with: `psql -h /tmp flexemarkets`
 - Auth method: trust (local and localhost)
-- PATH configured in `~/.profile` by `database build` and `database install`
+- PATH configured in `~/.bashrc` (falling back to `~/.profile` if absent) by `database build` and `database install`. `~/.profile` alone is not enough: it is read only by login shells, so a normal terminal never picks up `/usr/local/pgsql/bin`.
