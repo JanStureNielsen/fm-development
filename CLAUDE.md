@@ -15,10 +15,14 @@ A unified CLI with subcommands:
 - **git config** — Configure global git settings: prompts for `user.name`/`user.email` if unset, sets `init.defaultBranch=main` and `core.excludesfile=~/.gitignore_global`, writes/merges the global ignore patterns, and runs `gh auth setup-git` for the GitHub credential helper.
 - **repo install** — Clone FM repositories and configure fork remotes (upstream = org, origin = user fork).
 - **repo update** — Fetch all remotes and pull latest code for all repositories.
-- **database build** — Install build deps, clone/update PostgreSQL source, compile, install binaries + contrib, and configure PATH. Requires sudo.
-- **database install** — Run initdb, configure trust auth, set up systemd service (Linux) or launchctl guidance (macOS), create roles (`jan`, `u4cv4dsie00kdu`) and the `flexemarkets` database. Requires sudo.
-- **database load [-o OWNER] \<dir|files\>** — Load pg_restore backups. DB name derived from filename prefix (before first dash). Default owner: `u4cv4dsie00kdu`.
-- **database delete** — Stop service, remove data directory, binaries, and source. Requires typing `yes` to confirm.
+- **repo remotes** — Show the configured remotes for all repositories.
+- **aliases** — Wire the FM application aliases into the shell rc file. Appends a `source` line pointing at `fm-robots/etc/fm/fm-aliases.sh`, which defines one alias per `~/.fm/fm-*.jar` (`fm-server`, `fm-robots-server`, `fm-maker`, …) plus `fm` → `fm-manager`. Sourced by path, not copied, so alias changes from `repo update` take effect on the next shell, and newly built jars appear without re-running anything. Idempotent.
+- **pg build** — Install build deps, clone/update PostgreSQL source, compile, install binaries + contrib, and configure PATH. Requires sudo.
+- **pg install** — Run initdb, configure trust auth, set up systemd service (Linux) or launchctl guidance (macOS), create roles (`jan`, `u4cv4dsie00kdu`) and the `flexemarkets` database. Requires sudo.
+- **pg load [-o OWNER] \<dir|files\>** — Load pg_restore backups. DB name derived from filename prefix (before first dash). Default owner: `u4cv4dsie00kdu`.
+- **pg delete** — Stop service, remove data directory, binaries, and source. Requires typing `yes` to confirm.
+
+The PostgreSQL group accepts `pg`, `postgresql`, or `database` as the command word; `pg` is what the script's own `--help` advertises.
 
 Global options: `-u`/`--user` (GitHub fork username), `--source` (PG source dir), `--prefix` (PG install prefix).
 
@@ -47,22 +51,24 @@ The ignore patterns live in the `GITIGNORE_PATTERNS` heredoc in the script — C
 ## Conventions
 
 - Uses `set -euo pipefail` and `#!/usr/bin/env bash`.
-- Operates relative to parent directory (`$SCRIPT_DIR/..`), not the current working directory.
+- Operates relative to a resolved source root, not the current working directory. The root is the script's own directory when the script sits loose in the root, or its parent when the script is run from inside the `fm-development` checkout. `FM_SRC_DIR` overrides both.
 - The `step()` function pattern (`step() { echo "==> $*"; }`) is used for progress output.
-- Git remote convention: `upstream` = adhocmarkets org repo, `origin` = developer's personal fork.
+- Git remote convention: `upstream` = the org repo, `origin` = developer's personal fork. The org is per-repo (the 4th `REPOS` field), not a global constant — most repos are under `adhocmarkets`, but `fm-sdk` is under `flexemarkets`.
+- Organization affects the clone URL only. The local layout is flat: every repo sits directly under the source root, with no per-org directories.
 - Every command is idempotent: existing global git settings are never overwritten, and the global gitignore is merged (missing patterns appended under `# Added by fm-develop-setup`) rather than clobbered.
 - PostgreSQL prefix variable is `PG_PREFIX`, not `PREFIX` — nvm conflicts with `PREFIX` env var.
 
 ## Related Repositories (cloned by repo install)
 
-| Repo name | Local directory | Description |
-|---|---|---|
-| fm-data | fm-server | Server/backend |
-| fm-ui | fm-ui | Frontend UI |
-| fm-robots | fm-robots | Trading robots |
-| fm-robots-container | fm-robots-server | Robot container (user fork only; local dir differs from repo name) |
-| fm-sdk | fm-sdk | SDK |
-| fm-administration | fm-administration | Administration tools |
+| Repo name | Org | Local directory | Description |
+|---|---|---|---|
+| fm-data | adhocmarkets | fm-server | Server/backend |
+| fm-ui | adhocmarkets | fm-ui | Frontend UI |
+| fm-robots | adhocmarkets | fm-robots | Trading robots |
+| fm-robots-container | adhocmarkets | fm-robots-server | Robot container (user fork only; local dir differs from repo name) |
+| fm-sdk | flexemarkets | fm-sdk | SDK |
+| fm-administration | adhocmarkets | fm-administration | Administration tools |
+| fm-development | adhocmarkets | fm-development | This repo — the development setup script |
 
 ## PostgreSQL Setup
 
@@ -71,4 +77,4 @@ The ignore patterns live in the `GITIGNORE_PATTERNS` heredoc in the script — C
 - Socket directory: `/tmp`
 - Connect with: `psql -h /tmp flexemarkets`
 - Auth method: trust (local and localhost)
-- PATH configured in `~/.profile` by `database build` and `database install`
+- PATH configured in `~/.bashrc` (falling back to `~/.profile` if absent) by `database build` and `database install`. `~/.profile` alone is not enough: it is read only by login shells, so a normal terminal never picks up `/usr/local/pgsql/bin`.

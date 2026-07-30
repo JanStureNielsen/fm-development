@@ -2,7 +2,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source root that repos are cloned into. Two supported layouts:
+#
+#   ahm/fm-develop-setup                  script loose in the root -> root is SCRIPT_DIR
+#   ahm/fm-development/fm-develop-setup   script inside its own checkout -> root is the parent
+#
+# This used to be an unconditional "$SCRIPT_DIR/..", which for the loose
+# layout resolved one level too high and scattered the clones into the
+# root's parent (~/src instead of ~/src/ahm). Set FM_SRC_DIR to override.
+if [[ -n "${FM_SRC_DIR:-}" ]]; then
+    PARENT_DIR="$(cd "$FM_SRC_DIR" && pwd)"
+elif [[ -e "$SCRIPT_DIR/.git" ]]; then
+    PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PARENT_DIR="$SCRIPT_DIR"
+fi
 
 # Defaults
 SOURCE_DIR="$PARENT_DIR/postgresql"
@@ -35,9 +50,24 @@ is_git_configured() {
     [[ -f "$GITIGNORE_GLOBAL" ]]
 }
 
+# Shell rc file to write persistent settings into.
+#
+# ~/.bashrc, not ~/.profile: ~/.profile is read only by *login* shells, so a
+# normal terminal (non-login interactive) never saw $PG_PREFIX/bin and psql
+# appeared to be missing. /etc/profile sources ~/.bashrc, so putting it in
+# ~/.bashrc covers interactive *and* login shells. Fall back to ~/.profile
+# only when there is no ~/.bashrc.
+shell_rc() {
+    if [[ -f "$HOME/.bashrc" ]]; then
+        echo "$HOME/.bashrc"
+    else
+        echo "$HOME/.profile"
+    fi
+}
+
 configure_path() {
     step "Configuring PATH"
-    PROFILE="$HOME/.profile"
+    PROFILE="$(shell_rc)"
     if ! grep -qF "$PG_PREFIX/bin" "$PROFILE" 2>/dev/null; then
         echo "" >> "$PROFILE"
         echo "# PostgreSQL" >> "$PROFILE"
@@ -48,6 +78,46 @@ configure_path() {
     fi
     export PATH="$PG_PREFIX/bin:$PATH"
     echo "    Run 'source $PROFILE' or start a new shell to use psql."
+}
+
+# ============================================================
+# aliases — source the FM application aliases from the shell rc
+# ============================================================
+# fm-robots ships the alias definitions; this only wires them up. The file
+# builds one alias per ~/.fm/fm-*.jar (fm-server, fm-robots-server, fm-maker,
+# ...) plus fm -> fm-manager, so new jars are picked up without touching the
+# rc file again. Sourced by path rather than copied, so a "repo update" that
+# changes the aliases takes effect on the next shell.
+FM_ALIASES_REL="fm-robots/etc/fm/fm-aliases.sh"
+
+is_aliases_configured() { grep -qF "$FM_ALIASES_REL" "$(shell_rc)" 2>/dev/null; }
+
+configure_aliases() {
+    step "Configuring FM application aliases"
+
+    local aliases_file="$PARENT_DIR/$FM_ALIASES_REL"
+    if [[ ! -f "$aliases_file" ]]; then
+        echo "    SKIP: $aliases_file not found (clone fm-robots first)"
+        return
+    fi
+
+    local rc
+    rc="$(shell_rc)"
+    if grep -qF "$FM_ALIASES_REL" "$rc" 2>/dev/null; then
+        echo "    Already sourced from $rc"
+    else
+        {
+            echo ""
+            echo "# FM application aliases (fm-server, fm-robots-server, fm-maker, ...)"
+            echo "[[ -f \"$aliases_file\" ]] && source \"$aliases_file\""
+        } >> "$rc"
+        echo "    Added source line to $rc"
+    fi
+
+    if [[ ! -d "$HOME/.fm" ]]; then
+        echo "    NOTE: ~/.fm does not exist yet — aliases appear once the jars are built."
+    fi
+    echo "    Run 'source $rc' or start a new shell to use the aliases."
 }
 
 usage() {
@@ -71,6 +141,7 @@ Commands:
   repo install        Clone repositories and configure remotes
   repo update         Fetch and pull latest code for all repositories
   repo remotes        Show remotes for all repositories
+  aliases             Source the FM application aliases from the shell rc file
   pg build            Build PostgreSQL from source
   pg install          Initialize database, create service, roles, and databases
   pg load             Load PostgreSQL backup files
@@ -122,13 +193,20 @@ detect_os() {
 }
 
 # --- Repo list (shared by repo install and repo update) ---
+# repo_name  local_dir  has_upstream  org
+#
+# org is the GitHub organization the repo is cloned from. It affects the clone
+# URL only -- the local layout stays flat, with every repo directly under the
+# source root. fm-sdk lives in the flexemarkets org; adhocmarkets/fm-sdk still
+# resolves by redirect, but flexemarkets is the canonical home.
 REPOS=(
-    "fm-data        fm-server              yes"
-    "fm-ui          fm-ui                  yes"
-    "fm-robots      fm-robots              yes"
-    "fm-robots-container fm-robots-server    no"
-    "fm-sdk         fm-sdk                 yes"
-    "fm-administration fm-administration   yes"
+    "fm-data        fm-server              yes  adhocmarkets"
+    "fm-ui          fm-ui                  yes  adhocmarkets"
+    "fm-robots      fm-robots              yes  adhocmarkets"
+    "fm-robots-container fm-robots-server   no  adhocmarkets"
+    "fm-sdk         fm-sdk                 yes  flexemarkets"
+    "fm-administration fm-administration   yes  adhocmarkets"
+    "fm-development fm-development         yes  adhocmarkets"
 )
 
 # ============================================================
@@ -428,7 +506,7 @@ repo_install() {
     cd "$PARENT_DIR"
 
     for entry in "${REPOS[@]}"; do
-        read -r repo local_dir has_upstream <<< "$entry"
+        read -r repo local_dir has_upstream org <<< "$entry"
 
         if [[ -d "$PARENT_DIR/$local_dir" ]]; then
             echo "SKIP $local_dir (already exists)"
@@ -436,16 +514,16 @@ repo_install() {
         fi
 
         if [[ "$has_upstream" == "yes" ]]; then
-            echo "CLONE adhocmarkets/$repo -> $local_dir"
-            git clone "git@github.com:adhocmarkets/$repo.git" "$local_dir"
+            echo "CLONE $org/$repo -> $local_dir"
+            git clone "git@github.com:$org/$repo.git" "$local_dir"
             cd "$local_dir"
             git remote rename origin upstream
             git remote add origin "git@github.com:$USER/$repo.git"
             git fetch --all
             cd "$PARENT_DIR"
         elif [[ "$has_upstream" == "org" ]]; then
-            echo "CLONE adhocmarkets/$repo -> $local_dir (org only)"
-            git clone "git@github.com:adhocmarkets/$repo.git" "$local_dir"
+            echo "CLONE $org/$repo -> $local_dir (org only)"
+            git clone "git@github.com:$org/$repo.git" "$local_dir"
         else
             echo "CLONE $USER/$repo -> $local_dir (no upstream)"
             git clone "git@github.com:$USER/$repo.git" "$local_dir"
@@ -463,7 +541,7 @@ repo_update() {
     cd "$PARENT_DIR"
 
     for entry in "${REPOS[@]}"; do
-        read -r repo local_dir has_upstream <<< "$entry"
+        read -r repo local_dir has_upstream org <<< "$entry"
 
         if [[ ! -d "$PARENT_DIR/$local_dir" ]]; then
             echo "SKIP $local_dir (not cloned)"
@@ -485,7 +563,7 @@ repo_update() {
 # ============================================================
 repo_remotes() {
     for entry in "${REPOS[@]}"; do
-        read -r repo local_dir _has_upstream <<< "$entry"
+        read -r repo local_dir _has_upstream _org <<< "$entry"
 
         if [[ ! -d "$PARENT_DIR/$local_dir" ]]; then
             echo "$local_dir: (not cloned)"
@@ -863,6 +941,7 @@ EOF
             *) echo "Unknown repo command: $1" >&2; exit 1 ;;
         esac
         ;;
+    aliases) configure_aliases ;;
     zip)     install_zip ;;
     git)
         shift
@@ -954,7 +1033,7 @@ EOF
         TASK_LABELS+=("Clone repositories and configure remotes:")
         any_repo_needed=false
         for entry in "${REPOS[@]}"; do
-            read -r repo local_dir _has_upstream <<< "$entry"
+            read -r repo local_dir _has_upstream _org <<< "$entry"
             if [[ -d "$PARENT_DIR/$local_dir" ]]; then
                 TASK_LABELS+=("  [✓] $local_dir (already cloned)")
             else
@@ -965,6 +1044,9 @@ EOF
         if "$any_repo_needed"; then
             TASKS+=("repos")
         fi
+
+        # After repos: the alias file lives in the fm-robots checkout.
+        add_task aliases is_aliases_configured "Configure FM application aliases" "already configured"
 
         # --- Show plan and ask for confirmation ---
         echo ""
@@ -1007,6 +1089,7 @@ EOF
                     database_install
                     ;;
                 repos)  repo_install ;;
+                aliases) configure_aliases ;;
             esac
         done
         ;;
