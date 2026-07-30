@@ -46,6 +46,7 @@ Installed by the default command (no args):
 | fm-robots-container | fm-robots-container | Robot container (user fork only) |
 | fm-sdk | fm-sdk | SDK |
 | fm-administration | fm-administration | Administration tools |
+| fm-development | fm-development | This repo — the development setup script |
 
 ## PostgreSQL Setup
 
