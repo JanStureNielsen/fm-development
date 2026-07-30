@@ -60,7 +60,7 @@ The ignore patterns live in the `GITIGNORE_PATTERNS` heredoc in the script — C
 | fm-data | fm-server | Server/backend |
 | fm-ui | fm-ui | Frontend UI |
 | fm-robots | fm-robots | Trading robots |
-| fm-robots-container | fm-robots-container | Robot container (user fork only) |
+| fm-robots-container | fm-robots-server | Robot container (user fork only; local dir differs from repo name) |
 | fm-sdk | fm-sdk | SDK |
 | fm-administration | fm-administration | Administration tools |
 

@@ -126,7 +126,7 @@ REPOS=(
     "fm-data        fm-server              yes"
     "fm-ui          fm-ui                  yes"
     "fm-robots      fm-robots              yes"
-    "fm-robots-container fm-robots-container no"
+    "fm-robots-container fm-robots-server    no"
     "fm-sdk         fm-sdk                 yes"
     "fm-administration fm-administration   yes"
 )
