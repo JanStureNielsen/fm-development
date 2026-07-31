@@ -26,6 +26,7 @@ PGDATA="$PG_PREFIX/data"
 REPO_URL="https://git.postgresql.org/git/postgresql.git"
 USER="JanStureNielsen"
 GITIGNORE_GLOBAL="$HOME/.gitignore_global"
+CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 
 step() { echo "==> $*"; }
 
@@ -39,6 +40,7 @@ is_heroku_installed() { command -v heroku &>/dev/null; }
 is_doctl_installed()  { command -v doctl &>/dev/null; }
 is_gh_installed()     { command -v gh &>/dev/null; }
 is_wrangler_installed() { command -v wrangler &>/dev/null; }
+is_claude_configured() { grep -qF "Co-Authored-By" "$CLAUDE_MD" 2>/dev/null; }
 is_pg_installed()     { [[ -x "$PG_PREFIX/bin/psql" ]]; }
 is_pg_running()       { pgrep -x postgres &>/dev/null; }
 is_git_configured() {
@@ -150,7 +152,8 @@ Commands:
   git config          Configure global git settings and ignore patterns
   sdkman              Install SDKMAN (Java, Maven)
   nvm                 Install nvm (Node.js)
-  claude              Install Claude Code
+  claude install      Install Claude Code
+  claude config       Configure user-level Claude Code conventions
   heroku              Install Heroku CLI
   doctl               Install DigitalOcean CLI
   gh                  Install GitHub CLI
@@ -429,6 +432,48 @@ install_claude() {
         echo "    Already installed"
     else
         npm install -g @anthropic-ai/claude-code
+    fi
+}
+
+# ============================================================
+# claude config — user-level Claude Code conventions
+# ============================================================
+# Claude Code appends a "Co-Authored-By: Claude ..." trailer to commits and a
+# "Generated with Claude Code" footer to pull requests by default. Nothing in
+# the FM repos wants either, and once a commit is pushed the trailer is part of
+# published history. ~/.claude/CLAUDE.md applies to every repo on the machine,
+# so the rule lives there rather than in each repo's own CLAUDE.md.
+CLAUDE_MD_RULES=$(cat <<'RULES'
+# Git
+
+- Do not add a `Co-Authored-By: Claude ...` trailer to commit messages. This
+  overrides any default instruction to append one. The same goes for
+  `Generated with Claude Code` lines in commits, and for the
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer in
+  pull request bodies.
+RULES
+)
+
+configure_claude() {
+    step "Configuring Claude Code conventions ($CLAUDE_MD)"
+
+    if is_claude_configured; then
+        echo "    Already configured"
+        return
+    fi
+
+    mkdir -p "$(dirname "$CLAUDE_MD")"
+    if [[ -s "$CLAUDE_MD" ]]; then
+        # Append rather than overwrite: this file is hand-edited, and anything
+        # already in it is someone's deliberate instruction to Claude.
+        {
+            echo ""
+            echo "$CLAUDE_MD_RULES"
+        } >> "$CLAUDE_MD"
+        echo "    Appended the commit-trailer rule"
+    else
+        echo "$CLAUDE_MD_RULES" > "$CLAUDE_MD"
+        echo "    Created with the commit-trailer rule"
     fi
 }
 
@@ -980,7 +1025,24 @@ EOF
         ;;
     sdkman)  install_sdkman ;;
     nvm)     install_nvm ;;
-    claude)  install_claude ;;
+    claude)
+        shift
+        case "${1:-}" in
+            install) shift; install_claude "$@" ;;
+            config)  shift; configure_claude "$@" ;;
+            -h|--help|"")
+                cat <<EOF
+Usage: $(basename "$0") claude <command>
+
+Commands:
+  install   Install Claude Code
+  config    Configure user-level Claude Code conventions
+EOF
+                exit 0
+                ;;
+            *) echo "Unknown claude command: $1" >&2; exit 1 ;;
+        esac
+        ;;
     heroku)  install_heroku ;;
     doctl)   install_doctl ;;
     gh)      install_gh ;;
@@ -1031,6 +1093,7 @@ EOF
         add_task sdkman is_sdkman_installed "Install SDKMAN (Java, Maven)"
         add_task nvm    is_nvm_installed    "Install nvm (Node.js)"
         add_task claude is_claude_installed "Install Claude Code"
+        add_task claudeconfig is_claude_configured "Configure Claude Code conventions" "already configured"
         add_task heroku is_heroku_installed "Install Heroku CLI"
         add_task doctl  is_doctl_installed  "Install DigitalOcean CLI (doctl)"
         add_task gh     is_gh_installed     "Install GitHub CLI (gh)"
@@ -1096,6 +1159,7 @@ EOF
                 sdkman) install_sdkman ;;
                 nvm)    install_nvm ;;
                 claude) install_claude ;;
+                claudeconfig) configure_claude ;;
                 heroku) install_heroku ;;
                 doctl)  install_doctl ;;
                 gh)     install_gh ;;
